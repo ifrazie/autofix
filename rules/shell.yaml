@@ -1,0 +1,15 @@
+id: subprocess-shell-false
+rationale: "subprocess(..., shell=True) invites shell injection; pass the command as an argument list with shell=False."
+match:
+  call: "subprocess"
+  keyword:
+    shell: true
+transform:
+  prompt: >
+    You are given a Python subprocess call (subprocess.run / Popen / call /
+    check_output) invoked with shell=True and a string command. Rewrite ONLY this
+    call to use shell=False by passing the command as a list of arguments (split
+    the string command into argv tokens), preserving all other keyword arguments.
+    Return valid Python for the single call expression.
+    If the command is dynamically built in a way that cannot be safely split into
+    a static argument list, mark it not confident and explain why.

@@ -1,0 +1,23 @@
+# Personal learning context — keep out of commits by default
+/devpost/learner-profile.md
+
+# Devpost Learn harness tooling — not part of the Autofix product
+/.claude/
+/.agents/
+/agent/
+/skills-lock.json
+
+# Local credentials — never commit real secrets
+.env
+.env.*
+!.env.example
+
+# Python build / cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/

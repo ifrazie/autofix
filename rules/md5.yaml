@@ -1,0 +1,13 @@
+id: md5-to-sha256
+rationale: "MD5 is cryptographically broken and unsafe for security hashing; use SHA-256 instead."
+match:
+  call: "md5"
+transform:
+  prompt: >
+    You are given a Python call to md5() used for security-sensitive hashing.
+    Rewrite ONLY this call so it uses hashlib.sha256() instead of md5, preserving
+    the surrounding call, arguments, and any chained method (e.g. .hexdigest()).
+    Return valid Python for the single expression.
+    IMPORTANT: If md5 is being used as a non-security checksum, cache key, ETag,
+    dedup key, or fingerprint (not for passwords, tokens, signatures, or integrity
+    against tampering), do NOT change it — mark it not confident and explain why.
