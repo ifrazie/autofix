@@ -1,11 +1,14 @@
 """AI transformer.
 
-For each match, hand the local model (Ollama, via the strands-agents SDK) the
-matched snippet plus surrounding context and the rule's transform prompt, and ask
-for a *structured* result: the replacement code, a confidence flag, and a reason.
-Our code — not the model — decides what to do with it (splice or skip; see
-matcher/verifier). Keeping the model on a short leash (one snippet in, one
-structured object out) is what keeps the result trustworthy.
+For each match, hand a model the matched snippet plus surrounding context and the
+rule's transform prompt, and ask for a *structured* result: the replacement code,
+a confidence flag, and a reason. Our code — not the model — decides what to do with
+it (splice or skip; see matcher/verifier). Keeping the model on a short leash (one
+snippet in, one structured object out) is what keeps the result trustworthy.
+
+Two interchangeable backends sit behind the same `Agent.structured_output` call:
+a cloud provider (AWS Bedrock, the default) and a local one (Ollama). The provider
+choice never touches the transform logic below — only how the agent is built.
 """
 
 from __future__ import annotations
@@ -20,8 +23,22 @@ from pydantic import BaseModel, Field
 
 from .matcher import Match
 
+# Providers ----------------------------------------------------------------- #
+PROVIDERS = ("bedrock", "ollama")
+DEFAULT_PROVIDER = "bedrock"
+
+# Bedrock (cloud, default): Claude Sonnet 4.5 via its us-east-1 inference profile.
+DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+DEFAULT_REGION = "us-east-1"
+
+# Ollama (local fallback): kept so the tool still runs with no cloud/key/cost.
 DEFAULT_MODEL = "deepseek-coder-v2"
 DEFAULT_HOST = "http://localhost:11434"
+
+
+def default_model_for(provider: str) -> str:
+    """The provider's default model id."""
+    return DEFAULT_BEDROCK_MODEL if provider == "bedrock" else DEFAULT_MODEL
 
 
 class TransformResult(BaseModel):
@@ -38,8 +55,16 @@ class TransformResult(BaseModel):
     )
 
 
-class OllamaError(RuntimeError):
+class ProviderError(RuntimeError):
+    """Raised when the selected model backend can't be reached or used."""
+
+
+class OllamaError(ProviderError):
     """Raised when Ollama is unreachable or the model is unavailable."""
+
+
+class BedrockError(ProviderError):
+    """Raised when AWS Bedrock can't be used (no creds / boto3 missing)."""
 
 
 def build_agent(model_id: str = DEFAULT_MODEL, host: str = DEFAULT_HOST):
@@ -54,6 +79,56 @@ def build_agent(model_id: str = DEFAULT_MODEL, host: str = DEFAULT_HOST):
 
     model = OllamaModel(host=host, model_id=model_id, temperature=0)
     return Agent(model=model)
+
+
+def build_bedrock_agent(model_id: str = DEFAULT_BEDROCK_MODEL, region: str = DEFAULT_REGION):
+    """Create a strands Agent backed by an AWS Bedrock model.
+
+    Same structured-output path as the Ollama agent — only the backend differs.
+    """
+
+    from strands import Agent
+    from strands.models import BedrockModel
+
+    model = BedrockModel(model_id=model_id, region_name=region, temperature=0)
+    return Agent(model=model)
+
+
+def check_bedrock(model_id: str = DEFAULT_BEDROCK_MODEL, region: str = DEFAULT_REGION) -> str:
+    """Fail fast if AWS credentials or boto3 are missing. Returns the model id."""
+
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover - dependency guard
+        raise BedrockError("the 'boto3' package is not installed") from exc
+
+    if boto3.Session(region_name=region).get_credentials() is None:
+        raise BedrockError(
+            "no AWS credentials found. Configure them (aws configure, env vars, or a role)."
+        )
+    return model_id
+
+
+def make_agent(provider: str, *, model: str | None = None, host: str = DEFAULT_HOST,
+               region: str = DEFAULT_REGION):
+    """Build an agent for the chosen provider (model defaults per provider)."""
+
+    if provider == "bedrock":
+        return build_bedrock_agent(model or DEFAULT_BEDROCK_MODEL, region)
+    if provider == "ollama":
+        return build_agent(model or DEFAULT_MODEL, host)
+    raise ProviderError(f"unknown provider '{provider}' (choose one of: {', '.join(PROVIDERS)})")
+
+
+def preflight(provider: str, *, model: str | None = None, host: str = DEFAULT_HOST,
+              region: str = DEFAULT_REGION) -> str:
+    """Verify the provider is usable; return the concrete model id to build with."""
+
+    if provider == "bedrock":
+        return check_bedrock(model or DEFAULT_BEDROCK_MODEL, region)
+    if provider == "ollama":
+        return check_ollama(model or DEFAULT_MODEL, host)
+    raise ProviderError(f"unknown provider '{provider}' (choose one of: {', '.join(PROVIDERS)})")
 
 
 def check_ollama(model_id: str = DEFAULT_MODEL, host: str = DEFAULT_HOST) -> str:

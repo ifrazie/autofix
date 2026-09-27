@@ -20,11 +20,14 @@ from .rules import RuleError, load_rules
 from .target import TargetError, resolve_target, python_files
 from .transformer import (
     DEFAULT_HOST,
-    DEFAULT_MODEL,
-    OllamaError,
-    build_agent,
-    check_ollama,
+    DEFAULT_PROVIDER,
+    DEFAULT_REGION,
+    PROVIDERS,
+    ProviderError,
+    default_model_for,
+    make_agent,
     plan_fixes,
+    preflight,
 )
 
 app = typer.Typer(
@@ -42,10 +45,19 @@ def _fail(msg: str) -> None:
 def main(
     target: str = typer.Argument(..., help="Local path or GitHub URL of the repository."),
     rule: List[Path] = typer.Option(..., "--rule", "-r", help="Rule YAML file (repeatable)."),
-    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Ollama model id."),
-    host: str = typer.Option(DEFAULT_HOST, "--host", help="Ollama host URL."),
+    provider: str = typer.Option(
+        DEFAULT_PROVIDER, "--provider", help=f"Model backend: {' | '.join(PROVIDERS)}."
+    ),
+    model: str = typer.Option(
+        None, "--model", help="Model id (defaults to the provider's default model)."
+    ),
+    region: str = typer.Option(DEFAULT_REGION, "--region", help="AWS region (bedrock only)."),
+    host: str = typer.Option(DEFAULT_HOST, "--host", help="Ollama host URL (ollama only)."),
 ) -> None:
     """Find and fix every instance of each rule's pattern in the target."""
+
+    if provider not in PROVIDERS:
+        _fail(f"unknown provider '{provider}' (choose one of: {', '.join(PROVIDERS)})")
 
     try:
         resolved = resolve_target(target)
@@ -64,13 +76,16 @@ def main(
         typer.secho("\nNothing matched.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    typer.echo(f"Found {len(matches)} match(es). Asking the model to transform each...\n")
+    model_id = model or default_model_for(provider)
+    typer.echo(
+        f"Found {len(matches)} match(es). Asking {provider}:{model_id} to transform each...\n"
+    )
 
     try:
-        resolved_model = check_ollama(model, host)
-    except OllamaError as exc:
+        resolved_model = preflight(provider, model=model_id, host=host, region=region)
+    except ProviderError as exc:
         _fail(str(exc))
-    agent = build_agent(resolved_model, host)
+    agent = make_agent(provider, model=resolved_model, host=host, region=region)
 
     results = plan_fixes(agent, matches, resolved.path)
 

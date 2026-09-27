@@ -1,13 +1,12 @@
-"""Risk probe: prove the local-AI transform end-to-end.
+"""Risk probe: prove the AI transform end-to-end.
 
-Run with Ollama serving the model:
+    python -m autofix.probe [provider] [model]
 
-    python -m autofix.probe
-
-Feeds one real md5() snippet and one real subprocess(shell=True) snippet through
-the strands-agents + Ollama structured-output path and prints the structured
-result for each, so we can confirm the SDK wiring AND that the chosen model
-handles both shipped rules *before* building the full transformer.
+Defaults to the Bedrock provider (Claude Sonnet 4.5); pass `ollama` to probe the
+local backend instead. Feeds one real md5() snippet and one real
+subprocess(shell=True) snippet through the strands-agents structured-output path
+and prints the structured result for each, confirming the SDK wiring AND that the
+chosen model handles both shipped rules.
 """
 
 from __future__ import annotations
@@ -16,10 +15,13 @@ import sys
 
 from .transformer import (
     DEFAULT_HOST,
-    DEFAULT_MODEL,
-    OllamaError,
-    build_agent,
-    check_ollama,
+    DEFAULT_PROVIDER,
+    DEFAULT_REGION,
+    PROVIDERS,
+    ProviderError,
+    default_model_for,
+    make_agent,
+    preflight,
     transform_match,
 )
 
@@ -48,20 +50,24 @@ CASES = [
 ]
 
 
-def main(model_id: str = DEFAULT_MODEL, host: str = DEFAULT_HOST) -> int:
-    if len(sys.argv) > 1:
-        model_id = sys.argv[1]
+def main(provider: str = DEFAULT_PROVIDER, model_id: str | None = None) -> int:
+    argv = sys.argv[1:]
+    if argv and argv[0] in PROVIDERS:
+        provider, argv = argv[0], argv[1:]
+    if argv:
+        model_id = argv[0]
+    model_id = model_id or default_model_for(provider)
 
-    print(f"Probing model '{model_id}' at {host} ...\n")
+    print(f"Probing {provider}:{model_id} ...\n")
     try:
-        resolved = check_ollama(model_id, host)
-    except OllamaError as exc:
+        resolved = preflight(provider, model=model_id, host=DEFAULT_HOST, region=DEFAULT_REGION)
+    except ProviderError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     if resolved != model_id:
-        print(f"(resolved to installed tag '{resolved}')\n")
-    agent = build_agent(resolved, host)
+        print(f"(resolved to '{resolved}')\n")
+    agent = make_agent(provider, model=resolved, host=DEFAULT_HOST, region=DEFAULT_REGION)
 
     for label, prompt, snippet, context in CASES:
         print(f"--- {label} ---")
