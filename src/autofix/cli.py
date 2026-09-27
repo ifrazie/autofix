@@ -24,11 +24,13 @@ from .transformer import (
     DEFAULT_REGION,
     PROVIDERS,
     ProviderError,
+    changed_sources,
     default_model_for,
     make_agent,
     plan_fixes,
     preflight,
 )
+from .verifier import VerifierError, verify
 
 app = typer.Typer(
     add_completion=False,
@@ -109,6 +111,31 @@ def main(
         f"Summary: {len(matches)} matched, {len(fixed)} fixed, {len(skipped)} skipped.",
         bold=True,
     )
+
+    if not fixed:
+        typer.echo("\nNo confident fixes to verify.")
+        return
+
+    typer.echo("\nVerifying on a fresh branch...")
+    try:
+        vr = verify(resolved.path, changed_sources(results), resolved.path)
+    except VerifierError as exc:
+        _fail(str(exc))
+
+    where = f"{vr.workspace} (isolated copy)" if vr.isolated else str(vr.workspace)
+    typer.echo(f"Branch {vr.branch} - {len(vr.committed)} file(s) committed in {where}")
+
+    if vr.passed:
+        typer.secho("Tests: PASS", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho("Tests: FAIL", fg=typer.colors.RED, bold=True)
+        if vr.culprits:
+            typer.secho(
+                f"Likely culprit(s): {', '.join(vr.culprits)}",
+                fg=typer.colors.RED,
+                bold=True,
+            )
+        typer.echo("Branch left intact for inspection.")
 
 
 if __name__ == "__main__":
