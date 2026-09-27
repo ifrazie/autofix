@@ -9,7 +9,7 @@ Build mode: fast
 
 ## Slices
 
-- [ ] **1. Point autofix at the sample repo with a rule and see every vulnerable instance found**
+- [x] **1. Point autofix at the sample repo with a rule and see every vulnerable instance found**
   Becomes usable: A working `autofix ./sample-repo --rule rules/md5.yaml` command that resolves the target, loads and validates the YAML rule, walks every `.py` file, and prints each matched site (file, location, rule id) plus a matched count. No fixes yet.
   Why now: Delivers the deterministic half of the kernel — pluggable rule data driving a real match across a codebase — on slice one, so every later slice has a target list to act on. Bootstrapping (scaffold, deps, console script, seeded sample repo) lands here as part of the first real behavior.
   PRD ref: `prd.md > The Core Journey` (steps 1-2), `prd.md > Features and Behavior > Matching (deterministic)`
