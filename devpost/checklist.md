@@ -19,7 +19,7 @@ Build mode: fast
   Learner check: Run the command against the sample repo and confirm the instances it lists are exactly the ones you planted.
   Commit: `Add scaffold, rule loader, matcher, and seeded sample repo`
 
-- [ ] **2. Prove the local-AI transform works end-to-end (risk probe)**
+- [x] **2. Prove the local-AI transform works end-to-end (risk probe)**
   Becomes usable: A small runnable script/subcommand that sends one matched snippet + context and the rule's transform prompt to the local model through `strands-agents` over Ollama, and prints the structured `{ replacement_code, confident, reason }` result — confirmed for BOTH shipped rules (`md5`, `shell`).
   Why now: This is the project's one real unknown (the learner's stated exploration) and the biggest demo risk. It is a layer-only slice justified as risk-proof-with-runnable-evidence: it confirms provider selection, structured-output shape, and that `deepseek-coder-v2` actually handles both rules — before we invest in the full transformer. If the model stumbles, we swap it here, not at demo time.
   PRD ref: `prd.md > Features and Behavior > Transforming (AI, context-aware)`
@@ -61,7 +61,7 @@ Build mode: fast
 
 ## Hands-on Checkpoints
 
-- [ ] Early usable behavior explored — after Slice 2 (the AI-transform probe), where feedback on model behavior can still change the model choice and shape slices 3-5
+- [x] Early usable behavior explored — after Slice 2 (the AI-transform probe), where feedback on model behavior can still change the model choice and shape slices 3-5. Learner ran the probe, confirmed both rules transform correctly, and approved deepseek-coder-v2 to build on.
 - [ ] Final kick-the-tires exploration and feedback completed — after Slice 5, running the full demo including the generality beat
 
 ## Final Review
@@ -81,3 +81,8 @@ Reflection: [pending]
 Activity mode: [pending]
 
 ## Revisions
+
+- Ollama model-name resolution — `check_ollama` now resolves a bare name to its installed tag (e.g. `deepseek-coder-v2` → `deepseek-coder-v2:16b`); the build discovered Ollama 404s a bare name on the actual chat call when only a specific tag is pulled.
+- Replacement keyed by full span, not start position — a nested inner `md5(...)` call and its outer `.hexdigest()` call share a start position, so start-only keying replaced the wrong (outer) node and dropped `.hexdigest()`. Now keyed by (start+end) span.
+- Strip redundant trailing `.hexdigest()`/`.digest()` from model output — the matched span is the bare call, so a model-appended digest method produced `.hexdigest().hexdigest()`; the engine now unwraps it to mirror the exact node replaced.
+- Rule-prompt tuning + one fixture change — sharpened md5/shell prompts (security-vs-checksum clarity; keep the same subprocess function + argv split); `tokens.py` switched to the common `hashlib.md5` idiom because expression-only replacement cannot add a missing import (bare-name matching stays covered by a unit test).

@@ -54,12 +54,14 @@ def main(model_id: str = DEFAULT_MODEL, host: str = DEFAULT_HOST) -> int:
 
     print(f"Probing model '{model_id}' at {host} ...\n")
     try:
-        check_ollama(model_id, host)
+        resolved = check_ollama(model_id, host)
     except OllamaError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    agent = build_agent(model_id, host)
+    if resolved != model_id:
+        print(f"(resolved to installed tag '{resolved}')\n")
+    agent = build_agent(resolved, host)
 
     for label, prompt, snippet, context in CASES:
         print(f"--- {label} ---")

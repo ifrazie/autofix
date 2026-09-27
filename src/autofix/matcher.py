@@ -28,8 +28,16 @@ class Match:
     file_path: Path
     line: int  # 1-based start line of the matched call
     column: int  # 0-based start column
+    end_line: int  # 1-based end line
+    end_column: int  # 0-based end column
     node: cst.Call  # the matched call node
     snippet: str  # source text of the matched call
+
+    @property
+    def span(self) -> tuple[int, int, int, int]:
+        """Full position span — uniquely identifies this node even when an outer
+        call (e.g. ``.hexdigest()``) shares its start position."""
+        return (self.line, self.column, self.end_line, self.end_column)
 
 
 def _func_names(func: cst.BaseExpression) -> tuple[str | None, str | None]:
@@ -108,6 +116,8 @@ class _MatchCollector(cst.CSTVisitor):
                 file_path=self.file_path,
                 line=pos.start.line,
                 column=pos.start.column,
+                end_line=pos.end.line,
+                end_column=pos.end.column,
                 node=node,
                 snippet=snippet,
             )

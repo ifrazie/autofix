@@ -1,12 +1,11 @@
 """Command-line entry point.
 
-Parses arguments and orchestrates the pipeline:
-
     autofix <target> --rule md5.yaml --rule shell.yaml
 
-Slice 1 wires the deterministic front of the pipeline: resolve the target, load
-and validate the rules, and find + list every matching instance. Later slices add
-the transformer, verifier, and full report.
+Orchestrates the pipeline: resolve target -> load rules -> find matches ->
+ask the model to transform each (fixing confident matches, skipping ambiguous
+ones) -> report. Slice 4 adds the branch/commit/pytest verifier; Slice 5 adds
+the polished report.
 """
 
 from __future__ import annotations
@@ -19,6 +18,14 @@ import typer
 from .matcher import find_matches
 from .rules import RuleError, load_rules
 from .target import TargetError, resolve_target, python_files
+from .transformer import (
+    DEFAULT_HOST,
+    DEFAULT_MODEL,
+    OllamaError,
+    build_agent,
+    check_ollama,
+    plan_fixes,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -26,47 +33,67 @@ app = typer.Typer(
 )
 
 
+def _fail(msg: str) -> None:
+    typer.secho(f"error: {msg}", fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
 @app.command()
 def main(
-    target: str = typer.Argument(
-        ..., help="Local path or GitHub URL of the repository to scan."
-    ),
-    rule: List[Path] = typer.Option(
-        ..., "--rule", "-r", help="Path to a rule YAML file (repeatable)."
-    ),
+    target: str = typer.Argument(..., help="Local path or GitHub URL of the repository."),
+    rule: List[Path] = typer.Option(..., "--rule", "-r", help="Rule YAML file (repeatable)."),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Ollama model id."),
+    host: str = typer.Option(DEFAULT_HOST, "--host", help="Ollama host URL."),
 ) -> None:
-    """Find every instance of each rule's pattern in the target repository."""
+    """Find and fix every instance of each rule's pattern in the target."""
 
     try:
         resolved = resolve_target(target)
-    except TargetError as exc:
-        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
-
-    try:
         rules = load_rules([str(p) for p in rule])
-    except RuleError as exc:
-        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+    except (TargetError, RuleError) as exc:
+        _fail(str(exc))
 
     files = python_files(resolved.path)
-    typer.echo(
-        f"Scanning {resolved.path} - {len(files)} Python file(s), {len(rules)} rule(s).\n"
-    )
+    typer.echo(f"Scanning {resolved.path} - {len(files)} Python file(s), {len(rules)} rule(s).")
 
-    total = 0
+    matches = []
     for r in rules:
-        matches = find_matches(r, files)
-        total += len(matches)
-        typer.secho(f"Rule '{r.id}': {len(matches)} match(es)", bold=True)
-        typer.echo(f"  why: {r.rationale}")
-        for m in matches:
-            rel = m.file_path.relative_to(resolved.path)
-            typer.echo(f"  {rel}:{m.line}:{m.column}  {m.snippet}")
+        matches.extend(find_matches(r, files))
+
+    if not matches:
+        typer.secho("\nNothing matched.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=0)
+
+    typer.echo(f"Found {len(matches)} match(es). Asking the model to transform each...\n")
+
+    try:
+        resolved_model = check_ollama(model, host)
+    except OllamaError as exc:
+        _fail(str(exc))
+    agent = build_agent(resolved_model, host)
+
+    results = plan_fixes(agent, matches, resolved.path)
+
+    fixed = [r for r in results if r.status == "fixed"]
+    skipped = [r for r in results if r.status == "skipped"]
+
+    for r in results:
+        rel = r.match.file_path.relative_to(resolved.path).as_posix()
+        loc = f"{rel}:{r.match.line}"
+        if r.status == "fixed":
+            typer.secho(f"[FIXED] {loc}  ({r.match.rule.id})", fg=typer.colors.GREEN, bold=True)
+            typer.echo(f"    why: {r.reason}")
+            if r.diff:
+                typer.echo(r.diff.rstrip("\n"))
+        else:
+            typer.secho(f"[SKIP]  {loc}  ({r.match.rule.id})", fg=typer.colors.YELLOW, bold=True)
+            typer.echo(f"    left alone: {r.reason}")
         typer.echo("")
 
-    if total == 0:
-        typer.secho("Nothing matched.", fg=typer.colors.YELLOW)
+    typer.secho(
+        f"Summary: {len(matches)} matched, {len(fixed)} fixed, {len(skipped)} skipped.",
+        bold=True,
+    )
 
 
 if __name__ == "__main__":

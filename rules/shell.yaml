@@ -6,10 +6,20 @@ match:
     shell: true
 transform:
   prompt: >
-    You are given a Python subprocess call (subprocess.run / Popen / call /
-    check_output) invoked with shell=True and a string command. Rewrite ONLY this
-    call to use shell=False by passing the command as a list of arguments (split
-    the string command into argv tokens), preserving all other keyword arguments.
-    Return valid Python for the single call expression.
-    If the command is dynamically built in a way that cannot be safely split into
-    a static argument list, mark it not confident and explain why.
+    You are given a single Python subprocess call invoked with shell=True and a
+    string command. Rewrite ONLY this call to use shell=False, passing the command
+    as a list of arguments instead of a string.
+
+    STRICT RULES:
+    - Keep the EXACT same subprocess function that was called (subprocess.run stays
+      run, subprocess.Popen stays Popen, subprocess.call stays call). Do NOT change
+      which function is used.
+    - Split the string command into its argv tokens. If the command concatenates a
+      variable (e.g. "df -h " + mount), turn it into a list whose last element is
+      that variable, e.g. ['df', '-h', mount].
+    - Change shell=True to shell=False and keep every other keyword argument.
+    - Return valid Python for the single call expression only (no code fences).
+
+    Set confident = true for the common case of a simple command with an appended
+    argument. Only set confident = false if the command is built so dynamically it
+    cannot be safely tokenized into a static argument list.
