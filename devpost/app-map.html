@@ -66,6 +66,12 @@
   .pill b { font-size: 13.5px; } .pill span { display: block; font-size: 11.5px; color: var(--muted); }
   .chain .arrow { transform: none; }
 
+  /* Badge row */
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { font-size: 12px; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+           padding: 5px 11px; border-radius: 999px; box-shadow: var(--shadow); }
+  .badge b { color: var(--accent); }
+
   /* Decisions */
   .dec { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 0 0 16px; }
   .dec.ai-d { border-color: var(--ai); }
@@ -93,49 +99,70 @@
 
   <h2>The pipeline (execution order)</h2>
   <div class="flow">
-    <div class="stage"><div class="n">1</div><h3>Target</h3><p>Local path in place; URL → shallow clone.</p><div class="file"><code>target.py</code></div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="n">2</div><h3>Rules</h3><p>YAML → validated <code>Rule</code> data.</p><div class="file"><code>rules.py</code></div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="n">3</div><h3>Matcher</h3><p>libcst walk → exact match sites. No AI.</p><div class="file"><code>matcher.py</code></div></div>
-    <div class="arrow">→</div>
-    <div class="stage ai"><div class="n">4</div><h3>Transformer</h3><p>Snippet → structured fix. Confident→splice, else skip.</p><div class="file"><code>transformer.py</code></div></div>
-    <div class="arrow">→</div>
+    <div class="stage"><div class="n">1</div><h3>Target</h3><p>Local path in place; URL &rarr; shallow clone.</p><div class="file"><code>target.py</code></div></div>
+    <div class="arrow">&rarr;</div>
+    <div class="stage"><div class="n">2</div><h3>Rules</h3><p>YAML (a file or a whole dir) &rarr; validated <code>Rule</code> data.</p><div class="file"><code>rules.py</code></div></div>
+    <div class="arrow">&rarr;</div>
+    <div class="stage"><div class="n">3</div><h3>Matcher</h3><p>libcst walk &rarr; exact match sites. No AI.</p><div class="file"><code>matcher.py</code></div></div>
+    <div class="arrow">&rarr;</div>
+    <div class="stage ai"><div class="n">4</div><h3>Transformer</h3><p>Snippet &rarr; structured fix, in parallel. Confident&rarr;splice (+imports), else skip; failures isolated.</p><div class="file"><code>transformer.py</code></div></div>
+    <div class="arrow">&rarr;</div>
     <div class="stage"><div class="n">5</div><h3>Verifier</h3><p>Fresh branch, commit, run pytest, culprit on red.</p><div class="file"><code>verifier.py</code></div></div>
-    <div class="arrow">→</div>
-    <div class="stage"><div class="n">6</div><h3>Reporter</h3><p>Breakdown, rationale, diff, counts.</p><div class="file"><code>reporter.py</code></div></div>
+    <div class="arrow">&rarr;</div>
+    <div class="stage"><div class="n">6</div><h3>Reporter</h3><p>Human breakdown or <code>--json</code>; counts + cost.</p><div class="file"><code>reporter.py</code></div></div>
   </div>
-  <p style="margin-top:14px; font-size:13px; color:var(--muted)"><span class="det">■ deterministic</span> &nbsp; <span class="aim">■ the AI, on a short leash</span> &nbsp;—&nbsp; only stage 4 involves a model; everything else is plain, testable Python.</p>
+  <p style="margin-top:14px; font-size:13px; color:var(--muted)"><span class="det">&#9632; deterministic</span> &nbsp; <span class="aim">&#9632; the AI, on a short leash</span> &nbsp;&mdash;&nbsp; only stage 4 involves a model; everything else is plain, testable Python. <code>cli.py</code> orchestrates the stages and resolves settings; nothing is hardcoded per vuln class.</p>
 
   <h2>Components</h2>
   <div class="grid">
-    <div class="card"><h3>Target loader <span class="loc">target.py · 72 loc</span></h3><span class="det">DETERMINISTIC</span><p>Resolves the target to a working dir; clones remote URLs. Skips <code>.git</code>/<code>.venv</code>/<code>__pycache__</code> when listing <code>.py</code> files.</p></div>
-    <div class="card"><h3>Rule loader <span class="loc">rules.py · 102 loc</span></h3><span class="det">DETERMINISTIC</span><p>Parses + validates each YAML rule into a frozen <code>Rule</code>. The <code>match</code> block is a tiny DSL: <code>call</code> name + optional <code>keyword</code> constraints. Clear errors, no stack traces.</p></div>
-    <div class="card"><h3>Matcher <span class="loc">matcher.py · 141 loc</span></h3><span class="det">DETERMINISTIC</span><p>Compiles the DSL to a libcst visitor; resolves <code>md5()</code> and <code>hashlib.md5()</code> alike. Each <code>Match</code> carries its full start+end <b>span</b> — the key to precise splicing.</p></div>
-    <div class="card"><h3>Transformer <span class="loc">transformer.py · 336 loc</span></h3><span class="aim">AI · SHORT LEASH</span><p>Per match: one call expression + read-only context → <code>strands-agents</code> structured output <code>{replacement, confident, reason}</code>. Our code splices via libcst only if confident and parseable. Pluggable provider: Bedrock (default) or Ollama.</p></div>
-    <div class="card"><h3>Verifier <span class="loc">verifier.py · 156 loc</span></h3><span class="det">DETERMINISTIC</span><p>Lands fixes on <code>autofix/&lt;timestamp&gt;</code>, commits, runs <code>pytest</code>. Standalone repos branch in place; nested targets are copied + <code>git init</code>'d, so your tree is never touched. Names the likely culprit on red.</p></div>
-    <div class="card"><h3>Reporter <span class="loc">reporter.py · 106 loc</span></h3><span class="det">DETERMINISTIC</span><p>Per-fix breakdown with rule rationale, colorized inline diff, counts, zero-match message, culprit callout. Color degrades when piped; ASCII-only for cross-console safety.</p></div>
+    <div class="card"><h3>Orchestrator <span class="loc">cli.py &middot; 333 loc</span></h3><span class="det">DETERMINISTIC</span><p>Typer app: <code>fix</code> plus a <code>rules</code> group (<code>list</code>/<code>validate</code>). Wires the pipeline, run modes (<code>--dry-run</code>, <code>--no-test</code>, <code>--json</code>), verbosity + a progress bar, and resolves every setting by precedence.</p></div>
+    <div class="card"><h3>Config <span class="loc">config.py &middot; 85 loc</span></h3><span class="det">DETERMINISTIC</span><p>Reads <code>.autofix.toml</code> or <code>[tool.autofix]</code> (searched upward). Precedence: <b>CLI &gt; env var &gt; config file &gt; default</b>. Only recognized keys are honored, so a typo never silently changes behavior.</p></div>
+    <div class="card"><h3>Target loader <span class="loc">target.py &middot; 72 loc</span></h3><span class="det">DETERMINISTIC</span><p>Resolves the target to a working dir; clones remote URLs. Skips <code>.git</code>/<code>.venv</code>/<code>__pycache__</code> when listing <code>.py</code> files.</p></div>
+    <div class="card"><h3>Rule loader <span class="loc">rules.py &middot; 175 loc</span></h3><span class="det">DETERMINISTIC</span><p>Parses + validates each YAML rule into a frozen <code>Rule</code>. The <code>match</code> DSL: a <code>call</code> name (bare or dotted) + optional <code>keyword</code> and positional-<code>args</code> constraints; a rule may declare an <code>ensure_import</code>. Loads a single file or a whole directory. Clear errors, no stack traces.</p></div>
+    <div class="card"><h3>Matcher <span class="loc">matcher.py &middot; 174 loc</span></h3><span class="det">DETERMINISTIC</span><p>Compiles the DSL to a libcst visitor. A bare name matches <code>md5()</code> and <code>hashlib.md5()</code> alike; a dotted name (<code>yaml.load</code>) matches that path exactly, no over-match. Each <code>Match</code> carries its full start+end <b>span</b> — the key to precise splicing.</p></div>
+    <div class="card"><h3>Transformer <span class="loc">transformer.py &middot; 548 loc</span></h3><span class="aim">AI &middot; SHORT LEASH</span><p>Per match: one call expression + read-only context &rarr; <code>strands-agents</code> structured output <code>{replacement, confident, reason}</code>. Splices via libcst only if confident and parseable, and adds any imports the fix needs. Runs matches with bounded concurrency, a per-match timeout, and retry+backoff; a failure becomes an isolated <code>error</code>, never a sunk run. Pluggable provider: Bedrock (default) or Ollama.</p></div>
+    <div class="card"><h3>Verifier <span class="loc">verifier.py &middot; 172 loc</span></h3><span class="det">DETERMINISTIC</span><p>Lands fixes on <code>autofix/&lt;timestamp&gt;</code>, commits, runs <code>pytest</code> (<code>--no-test</code> skips it). Standalone repos branch in place; nested targets are copied + <code>git init</code>'d, so your tree is never touched. Names the likely culprit on red.</p></div>
+    <div class="card"><h3>Reporter <span class="loc">reporter.py &middot; 224 loc</span></h3><span class="det">DETERMINISTIC</span><p>Human report — per-fix breakdown with rule rationale, colorized inline diff, counts, an approximate usage/cost line — or a machine-readable <code>--json</code> payload. Renders <code>error</code> distinctly; color degrades when piped; ASCII-only for cross-console safety.</p></div>
   </div>
 
   <h2>Data model — nothing persists but the branch</h2>
   <div class="chain">
     <div class="pill"><b>Rule</b><span>from YAML</span></div>
-    <div class="arrow">→</div>
+    <div class="arrow">&rarr;</div>
     <div class="pill"><b>Match</b><span>site + span</span></div>
-    <div class="arrow">→</div>
-    <div class="pill"><b>FixResult</b><span>fixed / skipped</span></div>
-    <div class="arrow">→</div>
+    <div class="arrow">&rarr;</div>
+    <div class="pill"><b>FixResult</b><span>fixed / skipped / error</span></div>
+    <div class="arrow">&rarr;</div>
     <div class="pill"><b>VerifyResult</b><span>branch + pass/fail</span></div>
-    <div class="arrow">→</div>
+    <div class="arrow">&rarr;</div>
     <div class="pill" style="border-color:var(--accent)"><b>git branch</b><span>the only durable output</span></div>
+  </div>
+
+  <h2>Beyond the proof of concept — production hardening</h2>
+  <p style="margin:-6px 0 14px; font-size:13.5px; color:var(--muted)">Four verified milestones took the working PoC to a production-grade CLI — without touching the "fence the AI, verify deterministically" kernel.</p>
+  <div class="badges">
+    <span class="badge"><b>Reliability</b> &middot; bounded concurrency</span>
+    <span class="badge"><b>Reliability</b> &middot; per-match timeout + retry</span>
+    <span class="badge"><b>Reliability</b> &middot; adaptive Bedrock backoff</span>
+    <span class="badge"><b>Reliability</b> &middot; error isolation</span>
+    <span class="badge"><b>Rule power</b> &middot; add-imports on fix</span>
+    <span class="badge"><b>Rule power</b> &middot; dotted + positional matching</span>
+    <span class="badge"><b>Rule power</b> &middot; rule packs (<code>--rules-dir</code>)</span>
+    <span class="badge"><b>UX</b> &middot; <code>--dry-run</code> / <code>--no-test</code> / <code>--json</code></span>
+    <span class="badge"><b>UX</b> &middot; config-file precedence</span>
+    <span class="badge"><b>UX</b> &middot; approximate cost line</span>
+    <span class="badge"><b>Baseline</b> &middot; ruff + mypy + CI matrix</span>
+    <span class="badge"><b>Baseline</b> &middot; pinned deps, <code>--version</code></span>
   </div>
 
   <h2>Decisions that shaped the code</h2>
   <div class="dec"><b>libcst over stdlib <code>ast</code></b><p>A concrete syntax tree preserves formatting, so a fix produces a one-line diff instead of a reformatted file. The heavier API is the price of the "just read the clean diff" promise.</p></div>
-  <div class="dec ai-d"><b>The AI on a short leash — one snippet in, one structured object out</b><p>The model only judges <em>this site</em>; our code owns splicing, skipping, branching, and testing. That fence is what makes "AI edits your codebase" trustworthy.</p></div>
+  <div class="dec ai-d"><b>The AI on a short leash — one snippet in, one structured object out</b><p>The model only judges <em>this site</em>; our code owns splicing, skipping, branching, and testing. That fence is what makes "AI edits your codebase" trustworthy — and it stayed intact through every hardening milestone.</p></div>
   <div class="dec ai-d"><b>Pluggable provider, default AWS Bedrock (Claude Sonnet 4.5), Ollama retained</b><p>The confident-vs-skip judgment was the real risk; two local models got it wrong in opposite directions. The identical <code>structured_output</code> path behind both backends made the swap nearly free.</p></div>
   <div class="dec"><b>Key replacements by full span; strip redundant trailing methods</b><p>A nested <code>md5(...)</code> and its outer <code>.hexdigest()</code> share a start position — start-only keying replaced the wrong node. Both edge cases are pinned by regression tests.</p></div>
-  <div class="dec"><b>Verify in an isolated copy for non-repo targets</b><p>Branching in place on a target nested inside another repo would corrupt the parent. Copy + <code>git init</code> keeps the demo safe and mirrors the clone-URL path.</p></div>
+  <div class="dec"><b>One failure never sinks the run</b><p>Transforms run concurrently, each with a timeout and retry; a hang or provider error becomes an isolated <code>error</code> result while every other fix proceeds. The fence's promise — bad output is skipped and recorded, never applied — now also covers failure modes.</p></div>
+  <div class="dec"><b>Add-imports unlocks a class of fixes as pure rule data</b><p>A rule can declare <code>ensure_import</code>; a libcst codemod adds it iff missing when the fix applies — so <code>random</code>&rarr;<code>secrets</code> stays runnable, and the new power is still data, not engine logic.</p></div>
+  <div class="dec"><b>Honest, approximate cost</b><p>The SDK's structured-output path surfaces no provider token counts, so usage is estimated from prompt/response text and clearly labeled <em>approximate</em> rather than dressed up as a billed figure.</p></div>
 
   <h2>A practice to reuse</h2>
   <div class="practice">
@@ -150,7 +177,7 @@
   </div>
 
   <footer>
-    Generated from the finished Autofix codebase · deterministic engine + a fenced AI transform · 2 shipped rules (<code>md5.yaml</code>, <code>shell.yaml</code>) · 22 passing tests.
+    Generated from the finished, production-hardened Autofix codebase &middot; deterministic engine + a fenced AI transform &middot; 4 shipped rules (<code>md5</code>, <code>shell</code>, <code>tls</code>, <code>secrets</code>) &middot; 68 passing tests &middot; ruff + mypy + CI green across Python 3.11&ndash;3.13.
   </footer>
 
 </div>
