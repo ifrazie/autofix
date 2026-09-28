@@ -71,13 +71,13 @@ Build mode: fast
 ## Code Tour and App Map
 
 - [x] Learning activity complete — guided route, focused alternative, prior practice connected, or brief recap
-- [ ] Optional edit and transfer reflection addressed — offered/declined/already covered/not applicable as appropriate
+- [x] Optional edit and transfer reflection addressed — learner did the reuse edit (added a third rule) and a transfer discussion
 - [x] `devpost/app-map.html` generated from finished code, checked, and shown, including a project-grounded practice to reuse
 
 Activity and evidence: Guided code tour through the pipeline in execution order, grounded in real file:line references (cli → target → rules → matcher → transformer → verifier → reporter), pausing on the decisions that mattered. App map generated at `devpost/app-map.html` and opened in the browser.
 Route and stops: Orchestrator (cli.py, no domain logic) → Target loader → Rule loader (the data-not-code thesis) → Matcher (libcst-over-ast; full-span identity) → Transformer (short leash, provider abstraction, the two splice bugs) → Verifier (isolated-copy safety) → Reporter (graceful color, ASCII portability). Through-line: fence the AI to the one judgment, keep the mechanics deterministic.
-Edit outcome: [pending — reflection/edit offer open]
-Reflection: [pending]
+Edit outcome: Reuse edit done — added a third vuln class (disabled TLS verification, CWE-295) as pure data: `rules/tls.yaml` (call: requests + keyword verify:false) plus a `sample-repo/app/webhook.py` fixture and `test_webhook.py`. Ran `autofix ./sample-repo --rule rules/tls.yaml`: 1 matched, 1 fixed (verify=False → verify=True, other args preserved), tests PASS — with zero changes to the engine. The "new class = new file" claim proven in the learner's hands.
+Reflection: Discussed transferring the "fence the AI to one structured judgment, verify deterministically around it" pattern — PR-review bots, log/alert triage, data migration/schema mapping, IaC remediation, test generation, and structured document extraction. The tell each time: the model never mutates state directly, its output is a typed object the code branches on, and something mechanical turns "confident" into "proven."
 Activity mode: Guided route (learner-chosen).
 
 ## Revisions

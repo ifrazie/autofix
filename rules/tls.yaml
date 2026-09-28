@@ -1,0 +1,12 @@
+id: tls-verify-true
+rationale: "Disabling TLS certificate verification (verify=False) exposes traffic to man-in-the-middle attacks; require verify=True."
+match:
+  call: "requests"          # matches requests.get/post/... (root name)
+  keyword:
+    verify: false           # only when TLS verification is explicitly disabled
+transform:
+  prompt: >
+    This is an HTTP request that disables TLS certificate verification with
+    verify=False, which allows man-in-the-middle attacks. Rewrite the call to use
+    verify=True, keeping the same function and every other argument unchanged.
+    Return only the corrected call expression.
