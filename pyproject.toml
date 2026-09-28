@@ -59,7 +59,7 @@ warn_redundant_casts = true
 
 # Third-party packages that ship no type information.
 [[tool.mypy.overrides]]
-module = ["boto3", "strands.*", "ollama"]
+module = ["boto3", "botocore.*", "strands.*", "ollama"]
 ignore_missing_imports = true
 
 # numpy (pulled in transitively) ships stubs that use 3.12-only `type` syntax,

@@ -18,9 +18,12 @@ from .matcher import find_matches
 from .rules import RuleError, load_rules
 from .target import TargetError, python_files, resolve_target
 from .transformer import (
+    DEFAULT_CONCURRENCY,
     DEFAULT_HOST,
+    DEFAULT_MAX_RETRIES,
     DEFAULT_PROVIDER,
     DEFAULT_REGION,
+    DEFAULT_TIMEOUT,
     PROVIDERS,
     ProviderError,
     changed_sources,
@@ -62,6 +65,18 @@ def main(
     ),
     region: str = typer.Option(DEFAULT_REGION, "--region", help="AWS region (bedrock only)."),
     host: str = typer.Option(DEFAULT_HOST, "--host", help="Ollama host URL (ollama only)."),
+    concurrency: int = typer.Option(
+        DEFAULT_CONCURRENCY, "--concurrency", min=1,
+        help="Number of matches to transform in parallel.",
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_TIMEOUT, "--timeout", min=1,
+        help="Overall per-match budget in seconds (includes retries).",
+    ),
+    max_retries: int = typer.Option(
+        DEFAULT_MAX_RETRIES, "--max-retries", min=0,
+        help="Extra attempts after the first for transient transform failures.",
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -101,13 +116,21 @@ def main(
         _fail(str(exc))
     agent = make_agent(provider, model=resolved_model, host=host, region=region)
 
-    results = plan_fixes(agent, matches, resolved.path)
+    results = plan_fixes(
+        agent,
+        matches,
+        resolved.path,
+        concurrency=concurrency,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
 
     fixed = [r for r in results if r.status == "fixed"]
     skipped = [r for r in results if r.status == "skipped"]
+    errored = [r for r in results if r.status == "error"]
 
     reporter.fixes(results, resolved.path)
-    reporter.summary(len(matches), len(fixed), len(skipped))
+    reporter.summary(len(matches), len(fixed), len(skipped), len(errored))
 
     if not fixed:
         reporter.no_fixes()

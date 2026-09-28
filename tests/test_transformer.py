@@ -1,5 +1,7 @@
 """Transformer apply-logic tests using a fake agent (no model / Ollama needed)."""
 
+import time
+
 import libcst as cst
 
 from autofix.matcher import find_matches
@@ -10,6 +12,12 @@ from autofix.transformer import (
     changed_sources,
     plan_fixes,
 )
+
+
+def _ok(arg="b'a'"):
+    return TransformResult(
+        replacement_code=f"hashlib.sha256({arg})", confident=True, reason="safe"
+    )
 
 
 class FakeAgent:
@@ -97,3 +105,95 @@ def test_nested_hexdigest_call_is_preserved(tmp_path):
     expr = cst.parse_expression("hashlib.sha256(b'a')")
     new = apply_to_source("import hashlib\nx = hashlib.md5(b'a').hexdigest()\n", {m.span: expr})
     assert new.strip().endswith("hashlib.sha256(b'a').hexdigest()")
+
+
+# --- Reliability & resilience (Milestone 1) -------------------------------- #
+
+
+class ConditionalAgent:
+    """Raises when the matched snippet in the prompt contains ``marker``."""
+
+    def __init__(self, marker):
+        self.marker = marker
+
+    def structured_output(self, model, prompt):
+        if self.marker in prompt:
+            raise RuntimeError("provider exploded")
+        return _ok()
+
+
+class SlowAgent:
+    def __init__(self, delay):
+        self.delay = delay
+
+    def structured_output(self, model, prompt):
+        time.sleep(self.delay)
+        return _ok()
+
+
+class FlakyAgent:
+    """Fails the first ``fails`` calls, then succeeds. Not thread-shared in tests."""
+
+    def __init__(self, fails):
+        self.fails = fails
+        self.calls = 0
+
+    def structured_output(self, model, prompt):
+        self.calls += 1
+        if self.calls <= self.fails:
+            raise RuntimeError("throttled")
+        return _ok()
+
+
+def test_one_failing_match_is_isolated_as_error(tmp_path):
+    """A provider failure on one match records an 'error' and never sinks the run."""
+    # Keep the two calls far apart so their context windows don't overlap
+    # (otherwise the "ok" prompt would also carry the "boom" marker).
+    src = "import hashlib\n" + "x = hashlib.md5(b'boom')\n" + "\n" * 12 + "y = hashlib.md5(b'ok')\n"
+    p = _write(tmp_path, src)
+    matches = find_matches(_rule("md5"), [p])
+    assert len(matches) == 2
+
+    results = plan_fixes(ConditionalAgent("boom"), matches, tmp_path, max_retries=0)
+
+    by_status = {r.status for r in results}
+    assert by_status == {"error", "fixed"}
+    err = next(r for r in results if r.status == "error")
+    assert "provider exploded" in err.reason
+    # The healthy match still produced a real fix.
+    assert any(r.status == "fixed" for r in results)
+
+
+def test_transform_timeout_is_recorded_as_error(tmp_path):
+    p = _write(tmp_path, "import hashlib\nx = hashlib.md5(b'a')\n")
+    matches = find_matches(_rule("md5"), [p])
+
+    results = plan_fixes(SlowAgent(delay=1.0), matches, tmp_path, timeout=0.1, max_retries=0)
+
+    assert results[0].status == "error"
+    assert "timed out" in results[0].reason
+
+
+def test_transient_failure_is_retried_then_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr("autofix.transformer._RETRY_BACKOFF", 0.0)  # keep the test fast
+    p = _write(tmp_path, "import hashlib\nx = hashlib.md5(b'a')\n")
+    matches = find_matches(_rule("md5"), [p])
+    agent = FlakyAgent(fails=2)
+
+    results = plan_fixes(agent, matches, tmp_path, max_retries=2)
+
+    assert results[0].status == "fixed"
+    assert agent.calls == 3  # two failures + one success
+
+
+def test_results_stay_in_match_order_under_concurrency(tmp_path):
+    src = "import hashlib\n" + "".join(f"v{i} = hashlib.md5(b'{i}')\n" for i in range(6))
+    p = _write(tmp_path, src)
+    matches = find_matches(_rule("md5"), [p])
+    assert len(matches) == 6
+
+    results = plan_fixes(FakeAgent([_ok() for _ in matches]), matches, tmp_path, concurrency=4)
+
+    # Every result lines up with its own match, in source order, despite parallelism.
+    assert [r.match.line for r in results] == [m.line for m in matches]
+    assert all(r.status == "fixed" for r in results)

@@ -63,6 +63,8 @@ def fixes(results: list[FixResult], root: Path) -> None:
 
         if r.status == "fixed":
             typer.secho(f"[FIXED] {loc}  [{rule.id}]", fg=typer.colors.GREEN, bold=True)
+        elif r.status == "error":
+            typer.secho(f"[ERROR] {loc}  [{rule.id}]", fg=typer.colors.RED, bold=True)
         else:
             typer.secho(f"[SKIP]  {loc}  [{rule.id}]", fg=typer.colors.YELLOW, bold=True)
 
@@ -71,16 +73,18 @@ def fixes(results: list[FixResult], root: Path) -> None:
             typer.echo(f"    why:  {r.reason}")
             if r.diff:
                 typer.echo(_color_diff(r.diff.rstrip("\n")))
+        elif r.status == "error":
+            typer.echo(f"    error: {r.reason}")
         else:
             typer.echo(f"    left alone: {r.reason}")
         typer.echo("")
 
 
-def summary(matched: int, fixed: int, skipped: int) -> None:
-    typer.secho(
-        f"Summary: {matched} matched, {fixed} fixed, {skipped} skipped",
-        bold=True,
-    )
+def summary(matched: int, fixed: int, skipped: int, errored: int = 0) -> None:
+    line = f"Summary: {matched} matched, {fixed} fixed, {skipped} skipped"
+    if errored:
+        line += f", {errored} errored"
+    typer.secho(line, bold=True)
 
 
 def no_fixes() -> None:

@@ -14,6 +14,9 @@ choice never touches the transform logic below — only how the agent is built.
 from __future__ import annotations
 
 import difflib
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +37,18 @@ DEFAULT_REGION = "us-east-1"
 # Ollama (local fallback): kept so the tool still runs with no cloud/key/cost.
 DEFAULT_MODEL = "deepseek-coder-v2"
 DEFAULT_HOST = "http://localhost:11434"
+
+# Resilience defaults -------------------------------------------------------- #
+# How many matches to transform in parallel. Bounded so a large repo doesn't fan
+# out into hundreds of simultaneous model calls and trip provider rate limits.
+DEFAULT_CONCURRENCY = 4
+# Overall per-match budget (seconds), including any retries; a match that exceeds
+# it is recorded as an error rather than hanging the whole run.
+DEFAULT_TIMEOUT = 120.0
+# Extra attempts after the first for transient (e.g. throttling/network) failures.
+DEFAULT_MAX_RETRIES = 2
+# Base seconds for exponential backoff between retries (base * 2**attempt).
+_RETRY_BACKOFF = 0.5
 
 
 def default_model_for(provider: str) -> str:
@@ -91,12 +106,26 @@ def build_bedrock_agent(model_id: str = DEFAULT_BEDROCK_MODEL, region: str = DEF
     """Create a strands Agent backed by an AWS Bedrock model.
 
     Same structured-output path as the Ollama agent — only the backend differs.
+    The boto client is configured to retry throttling/5xx responses adaptively and
+    to bound each network call, so transient Bedrock hiccups are absorbed here
+    before the app-level retry in :func:`plan_fixes` ever sees them.
     """
 
+    from botocore.config import Config
     from strands import Agent
     from strands.models import BedrockModel
 
-    model = BedrockModel(model_id=model_id, region_name=region, temperature=0)
+    client_config = Config(
+        retries={"max_attempts": 4, "mode": "adaptive"},
+        connect_timeout=10,
+        read_timeout=60,
+    )
+    model = BedrockModel(
+        model_id=model_id,
+        region_name=region,
+        temperature=0,
+        boto_client_config=client_config,
+    )
     return Agent(model=model)
 
 
@@ -197,11 +226,19 @@ def transform_match(
 
 @dataclass
 class FixResult:
-    """The outcome for a single match: applied, or left alone with a reason."""
+    """The outcome for a single match.
+
+    ``status`` is one of:
+
+    * ``"fixed"``   — a confident, parseable replacement was produced;
+    * ``"skipped"`` — the model declined or its output was unusable (left alone);
+    * ``"error"``   — the transform itself failed (timeout / provider exception),
+      so this match is recorded and skipped without sinking the rest of the run.
+    """
 
     match: Match
-    status: str  # "fixed" | "skipped"
-    reason: str  # why safe (fixed) or why left alone (skipped)
+    status: str  # "fixed" | "skipped" | "error"
+    reason: str  # why safe (fixed), why left alone (skipped), or the failure (error)
     replacement_code: str | None = None
     diff: str | None = None  # unified diff of just this fix (fixed only)
 
@@ -277,49 +314,106 @@ def _unified_diff(old: str, new: str, filename: str) -> str:
     )
 
 
-def plan_fixes(agent, matches: list[Match], root: Path) -> list[FixResult]:
-    """Ask the model about every match and decide fixed vs. skipped.
+def _transform_with_retry(
+    agent, m: Match, context: str, max_retries: int
+) -> TransformResult:
+    """Call the model for one match, retrying transient failures with backoff.
 
-    Confident replacements that parse as a Python expression are recorded as
-    ``fixed`` (with an isolated per-fix diff); everything else — low confidence,
-    ambiguous, or non-parsing model output — is recorded as ``skipped`` with a
-    reason. Nothing is written to disk here; that is the verifier's job.
+    Runs inside a worker thread. Any exception (throttling, network, provider
+    error) is retried up to ``max_retries`` times with exponential backoff; the
+    last exception is re-raised if every attempt fails, and the caller turns that
+    into an ``error`` result rather than letting it abort the batch.
     """
 
-    results: list[FixResult] = []
-    source_cache: dict[Path, str] = {}
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return transform_match(agent, m.rule.transform_prompt, m.snippet, context)
+        except Exception as exc:  # provider-agnostic; classified only by retry budget
+            last_exc = exc
+            if attempt < max_retries:
+                time.sleep(_RETRY_BACKOFF * (2**attempt))
+    assert last_exc is not None  # loop ran at least once
+    raise last_exc
 
+
+def _finalize(tr: TransformResult, m: Match, source: str, root: Path) -> FixResult:
+    """Turn a model result into a fixed/skipped :class:`FixResult` (no I/O)."""
+
+    if not tr.confident:
+        return FixResult(m, "skipped", tr.reason or "model not confident")
+
+    try:
+        expr = cst.parse_expression(tr.replacement_code)
+    except cst.ParserSyntaxError as exc:
+        return FixResult(m, "skipped", f"model output invalid Python: {exc}")
+
+    expr = _strip_redundant_trailing(expr)
+    normalized = cst.Module(body=[]).code_for_node(expr)
+
+    rel = m.file_path.relative_to(root).as_posix()
+    new_source = apply_to_source(source, {m.span: expr})
+    return FixResult(
+        m,
+        "fixed",
+        tr.reason,
+        replacement_code=normalized,
+        diff=_unified_diff(source, new_source, rel),
+    )
+
+
+def plan_fixes(
+    agent,
+    matches: list[Match],
+    root: Path,
+    *,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+) -> list[FixResult]:
+    """Ask the model about every match and decide fixed / skipped / error.
+
+    Confident replacements that parse as a Python expression are recorded as
+    ``fixed`` (with an isolated per-fix diff); low-confidence, ambiguous, or
+    non-parsing output is ``skipped`` with a reason; and a transform that fails
+    outright (times out or raises even after retries) is recorded as ``error`` so
+    one bad match never sinks the rest of the batch. Nothing is written to disk
+    here; that is the verifier's job.
+
+    Matches are transformed concurrently (bounded by ``concurrency``); each match
+    has an overall ``timeout`` budget covering its retries. Results are returned in
+    match order regardless of completion order.
+    """
+
+    if not matches:
+        return []
+
+    source_cache: dict[Path, str] = {}
+    prepared: list[tuple[Match, str, str]] = []
     for m in matches:
         source = source_cache.setdefault(m.file_path, m.file_path.read_text(encoding="utf-8"))
-        context = _context_for(source, m.line)
-        tr = transform_match(agent, m.rule.transform_prompt, m.snippet, context)
+        prepared.append((m, source, _context_for(source, m.line)))
 
-        if not tr.confident:
-            results.append(FixResult(m, "skipped", tr.reason or "model not confident"))
-            continue
+    results: list[FixResult | None] = [None] * len(prepared)
+    workers = max(1, min(concurrency, len(prepared)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_transform_with_retry, agent, m, ctx, max_retries): i
+            for i, (m, _src, ctx) in enumerate(prepared)
+        }
+        for fut, i in futures.items():
+            m, source, _ctx = prepared[i]
+            try:
+                tr = fut.result(timeout=timeout)
+            except FutureTimeoutError:
+                results[i] = FixResult(m, "error", f"transform timed out after {timeout:g}s")
+                continue
+            except Exception as exc:  # isolate a provider failure to just this match
+                results[i] = FixResult(m, "error", f"transform failed: {exc}")
+                continue
+            results[i] = _finalize(tr, m, source, root)
 
-        try:
-            expr = cst.parse_expression(tr.replacement_code)
-        except cst.ParserSyntaxError as exc:
-            results.append(FixResult(m, "skipped", f"model output invalid Python: {exc}"))
-            continue
-
-        expr = _strip_redundant_trailing(expr)
-        normalized = cst.Module(body=[]).code_for_node(expr)
-
-        rel = m.file_path.relative_to(root).as_posix()
-        new_source = apply_to_source(source, {m.span: expr})
-        results.append(
-            FixResult(
-                m,
-                "fixed",
-                tr.reason,
-                replacement_code=normalized,
-                diff=_unified_diff(source, new_source, rel),
-            )
-        )
-
-    return results
+    return [r for r in results if r is not None]
 
 
 def changed_sources(results: list[FixResult]) -> dict[Path, str]:
