@@ -133,7 +133,7 @@ No database; nothing persists between runs except the git branch the tool create
 
 - **Rule** (in memory, from YAML): `id`, `rationale`, `match` spec, `transform.prompt`. Originates in the rule file; loaded at start; discarded at exit.
 - **Match** (in memory): `file_path`, `node`, `location`, originating `rule`. Produced by the matcher; consumed by the transformer.
-- **FixResult** (in memory): `match`, `status` (fixed / skipped), `replacement_code` or `skip_reason`, `diff`. Produced by the transformer; consumed by the verifier and reporter.
+- **FixResult** (in memory): `match`, `status` (fixed / skipped / **error**), `replacement_code` or `reason`, `diff`. Produced by the transformer; consumed by the verifier and reporter. (The `error` status is a post-PoC addition — a transform that times out or fails after retries is recorded and skipped rather than sinking the batch.)
 - **The branch** (`autofix/<timestamp>`, on disk in the target repo): the *only* durable output. When the user comes back later, the changes are there as a normal git branch to diff, test, or merge.
 
 ## File Structure
@@ -142,22 +142,25 @@ autofix/
 ├── src/
 │   └── autofix/
 │       ├── __init__.py
-│       ├── cli.py            # entry point: parse args, orchestrate the pipeline
+│       ├── cli.py            # entry point: fix + rules subcommands; run modes; config/precedence
+│       ├── config.py         # .autofix.toml / [tool.autofix] loader + CLI>env>config>default (post-PoC)
 │       ├── target.py         # Target Loader (local path / git clone)
-│       ├── rules.py          # Rule Loader + YAML schema + pattern-DSL model
+│       ├── rules.py          # Rule Loader + YAML schema + pattern-DSL model + rules-dir loader
 │       ├── matcher.py        # compile match spec → libcst matcher; walk files
-│       ├── transformer.py    # strands-agents (Bedrock/Ollama); structured output; apply via libcst
+│       ├── transformer.py    # strands-agents (Bedrock/Ollama); structured output; apply + add-imports via libcst
 │       ├── verifier.py       # branch, commit, run pytest, culprit detection
-│       └── reporter.py       # per-fix breakdown, rationale, inline diff, counts
+│       └── reporter.py       # per-fix breakdown, rationale, inline diff, counts, JSON, cost
 ├── rules/
 │   ├── md5.yaml              # md5() → sha256()
-│   └── shell.yaml            # subprocess(..., shell=True) → shell=False
+│   ├── shell.yaml            # subprocess(..., shell=True) → shell=False
+│   ├── tls.yaml              # requests(..., verify=False) → verify=True
+│   └── secrets.yaml          # random → secrets (post-PoC; proves the import unlock)
 ├── sample-repo/             # seeded ~15-file Python repo with planted patterns
 │   ├── ...                  #   incl. at least one ambiguous md5() to skip
 │   └── tests/               #   pytest suite that must stay green
-├── tests/                   # the tool's own unit tests (matcher, rules, etc.)
-├── devpost/                 # Devpost learning workspace
-├── pyproject.toml           # deps + `autofix` console script entry point
+├── tests/                   # the tool's own unit tests (matcher, rules, cli, config, ...)
+├── .github/workflows/ci.yml # ruff + mypy + pytest matrix (post-PoC; no model backend in CI)
+├── pyproject.toml           # deps (pinned) + dev extras + ruff/mypy config + `autofix` console script
 └── README.md
 ```
 
@@ -185,10 +188,12 @@ Carried forward from `scope.md > The POC Boundary` and `prd.md > Deferred From t
 - **A small call-matcher pattern DSL** instead of a full pattern language — both PoC rules are function calls; the DSL covers them and extends later without becoming a project of its own.
 - **Simple/binary fix-vs-skip** instead of graded **confidence scoring** — a reported skip is enough to preserve trust for the PoC.
 
+> **Post-PoC hardening.** After the PoC shipped, the tool was taken to a production-grade CLI in four verified milestones (engineering baseline; reliability & resilience; rule & fix power; CLI UX & config). Several boundaries above were lifted — fixes can now add imports, matching supports dotted names + positional args, rule packs load from a directory, and the CLI gained subcommands, run modes (`--dry-run`/`--no-test`), `--json`, config files, and an approximate cost line — all without changing the "fence the AI, verify deterministically" kernel. The remaining PoC boundaries (GitHub PRs, self-detection, multi-language) still stand. Full change log: `checklist.md > Revisions > Post-PoC hardening`.
+
 ## Decisions and Open Issues
 
 **Decisions (learner-chosen):**
-- **Python 3.10+ CLI** — same language as target + tests; native libcst/Strands support.
+- **Python 3.11+ CLI** — same language as target + tests; native libcst/Strands support. (PoC targeted 3.10+; the floor was raised to 3.11 during post-PoC hardening so `tomllib` is available in the standard library for config loading.)
 - **libcst for matching and editing** — chosen over stdlib `ast` to preserve formatting so diffs are clean; accepted the heavier API.
 - **Bare `strands-agents` SDK + structured output**, not the full harness — keeps the AI on one job (snippet → replacement) so all deterministic machinery stays testable and the result stays trustworthy.
 - **Pluggable provider, default AWS Bedrock (Claude Sonnet 4.5), Ollama retained as a local fallback** — the confident-vs-skip judgment is the core risk; verification showed frontier judgment materially outperforms the local models on it. Accepted the cost/credentials/reproducibility tradeoff for the default in exchange for correctness, while keeping the no-cost local path available via `--provider ollama`.
