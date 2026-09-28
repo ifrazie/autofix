@@ -45,13 +45,19 @@ class TransformResult(BaseModel):
     """The structured output we require from the model for one match."""
 
     replacement_code: str = Field(
-        description="The corrected replacement for ONLY the matched call expression, as valid Python."
+        description=(
+            "The corrected replacement for ONLY the matched call expression, "
+            "as valid Python."
+        )
     )
     confident: bool = Field(
         description="True only if the fix is correct and safe to apply; False to skip."
     )
     reason: str = Field(
-        description="Why the fix is safe, or — when not confident — why the match should be left alone."
+        description=(
+            "Why the fix is safe, or - when not confident - why the match "
+            "should be left alone."
+        )
     )
 
 
@@ -156,7 +162,7 @@ def check_ollama(model_id: str = DEFAULT_MODEL, host: str = DEFAULT_HOST) -> str
     if model_id in available:
         return model_id
     for name in available:
-        if name.split(":")[0] == model_id:
+        if name and name.split(":")[0] == model_id:
             return name
     raise OllamaError(f"model '{model_id}' is not pulled. Run: ollama pull {model_id}")
 
@@ -175,7 +181,9 @@ def _build_prompt(transform_prompt: str, snippet: str, context: str) -> str:
     )
 
 
-def transform_match(agent, transform_prompt: str, snippet: str, context: str = "") -> TransformResult:
+def transform_match(
+    agent, transform_prompt: str, snippet: str, context: str = ""
+) -> TransformResult:
     """Ask the model for a structured transformation of one matched snippet."""
 
     prompt = _build_prompt(transform_prompt, snippet, context)
@@ -329,8 +337,10 @@ def changed_sources(results: list[FixResult]) -> dict[Path, str]:
     out: dict[Path, str] = {}
     for path, frs in fixed_by_file.items():
         source = path.read_text(encoding="utf-8")
-        replacements = {
-            r.match.span: cst.parse_expression(r.replacement_code) for r in frs
-        }
+        replacements: dict[Span, cst.BaseExpression] = {}
+        for r in frs:
+            # A "fixed" result always carries its replacement code.
+            assert r.replacement_code is not None
+            replacements[r.match.span] = cst.parse_expression(r.replacement_code)
         out[path] = apply_to_source(source, replacements)
     return out

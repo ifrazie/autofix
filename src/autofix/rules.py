@@ -52,11 +52,13 @@ class Rule:
     transform_prompt: str
 
 
-def _require(mapping: dict, key: str, source: Path, kind: type = str) -> Any:
+def _require(mapping: dict[str, Any], key: str, source: Path, kind: type = str) -> Any:
     if key not in mapping:
         raise RuleError(f"{source}: missing required key '{key}'")
     value = mapping[key]
-    if not isinstance(value, kind) or (kind is str and not value.strip()):
+    if not isinstance(value, kind):
+        raise RuleError(f"{source}: key '{key}' must be a non-empty {kind.__name__}")
+    if isinstance(value, str) and not value.strip():
         raise RuleError(f"{source}: key '{key}' must be a non-empty {kind.__name__}")
     return value
 

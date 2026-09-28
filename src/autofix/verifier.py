@@ -17,7 +17,6 @@ unexplained.
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import sys
@@ -111,7 +110,9 @@ def _guess_culprits(pytest_output: str, changed_files: list[str]) -> list[str]:
     return suspects
 
 
-def verify(target: Path, changed: dict[Path, str], root: Path, test_path: str = ".") -> VerifyResult:
+def verify(
+    target: Path, changed: dict[Path, str], root: Path, test_path: str = "."
+) -> VerifyResult:
     """Apply ``changed`` sources on a fresh branch, commit, and run ``pytest``.
 
     ``changed`` maps original file paths to their rewritten source; ``root`` is the
@@ -136,7 +137,9 @@ def verify(target: Path, changed: dict[Path, str], root: Path, test_path: str = 
         committed.append(rel.as_posix())
 
     _git(workspace, "add", "-A")
-    commit = _git(workspace, *_GIT_IDENTITY, "commit", "-m", f"autofix: apply {len(committed)} fix(es)")
+    commit = _git(
+        workspace, *_GIT_IDENTITY, "commit", "-m", f"autofix: apply {len(committed)} fix(es)"
+    )
     if commit.returncode != 0:
         raise VerifierError(f"commit failed: {commit.stderr.strip()}")
 

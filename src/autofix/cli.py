@@ -10,14 +10,13 @@ verify on a fresh branch with pytest -> report.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
 
 import typer
 
 from . import reporter
 from .matcher import find_matches
 from .rules import RuleError, load_rules
-from .target import TargetError, resolve_target, python_files
+from .target import TargetError, python_files, resolve_target
 from .transformer import (
     DEFAULT_HOST,
     DEFAULT_PROVIDER,
@@ -43,10 +42,18 @@ def _fail(msg: str) -> None:
     raise typer.Exit(code=1)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"autofix {version('autofix')}")
+        raise typer.Exit()
+
+
 @app.command()
 def main(
     target: str = typer.Argument(..., help="Local path or GitHub URL of the repository."),
-    rule: List[Path] = typer.Option(..., "--rule", "-r", help="Rule YAML file (repeatable)."),
+    rule: list[Path] = typer.Option(..., "--rule", "-r", help="Rule YAML file (repeatable)."),
     provider: str = typer.Option(
         DEFAULT_PROVIDER, "--provider", help=f"Model backend: {' | '.join(PROVIDERS)}."
     ),
@@ -55,6 +62,13 @@ def main(
     ),
     region: str = typer.Option(DEFAULT_REGION, "--region", help="AWS region (bedrock only)."),
     host: str = typer.Option(DEFAULT_HOST, "--host", help="Ollama host URL (ollama only)."),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the autofix version and exit.",
+    ),
 ) -> None:
     """Find and fix every instance of each rule's pattern in the target."""
 

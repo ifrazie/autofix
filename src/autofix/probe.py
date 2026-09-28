@@ -39,13 +39,16 @@ CASES = [
         "md5 (security hashing)",
         MD5_PROMPT,
         'hashlib.md5((salt + password).encode("utf-8"))',
-        "def hash_password(password, salt):\n    return hashlib.md5((salt + password).encode('utf-8')).hexdigest()",
+        "def hash_password(password, salt):\n"
+        "    return hashlib.md5((salt + password).encode('utf-8')).hexdigest()",
     ),
     (
         "subprocess shell=True",
         SHELL_PROMPT,
         'subprocess.run("systemctl restart " + name, shell=True)',
-        "def restart_service(name):\n    result = subprocess.run('systemctl restart ' + name, shell=True)\n    return result.returncode",
+        "def restart_service(name):\n"
+        "    result = subprocess.run('systemctl restart ' + name, shell=True)\n"
+        "    return result.returncode",
     ),
 ]
 
