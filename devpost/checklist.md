@@ -62,11 +62,11 @@ Build mode: fast
 ## Hands-on Checkpoints
 
 - [x] Early usable behavior explored — after Slice 2 (the AI-transform probe), where feedback on model behavior can still change the model choice and shape slices 3-5. Learner ran the probe, confirmed both rules transform correctly, and approved deepseek-coder-v2 to build on.
-- [ ] Final kick-the-tires exploration and feedback completed — after Slice 5, running the full demo including the generality beat
+- [x] Final kick-the-tires exploration and feedback completed — after Slice 5, running the full demo including the generality beat. Learner reviewed the finished build and confirmed ready to ship (the four documented PoC limitations accepted as-is).
 
 ## Final Review
 
-- [ ] Final review complete — feedback resolved and learner confirms ready to ship
+- [x] Final review complete — feedback resolved and learner confirms ready to ship
 
 ## Code Tour and App Map
 
