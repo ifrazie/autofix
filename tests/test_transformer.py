@@ -30,8 +30,14 @@ class FakeAgent:
         return self._results.pop(0)
 
 
-def _rule(call):
-    return Rule(id="md5", rationale="", match=MatchSpec(call=call), transform_prompt="fix it")
+def _rule(call, ensure_imports=()):
+    return Rule(
+        id="md5",
+        rationale="",
+        match=MatchSpec(call=call),
+        transform_prompt="fix it",
+        ensure_imports=tuple(ensure_imports),
+    )
 
 
 def _write(tmp_path, text):
@@ -105,6 +111,52 @@ def test_nested_hexdigest_call_is_preserved(tmp_path):
     expr = cst.parse_expression("hashlib.sha256(b'a')")
     new = apply_to_source("import hashlib\nx = hashlib.md5(b'a').hexdigest()\n", {m.span: expr})
     assert new.strip().endswith("hashlib.sha256(b'a').hexdigest()")
+
+
+# --- Rule & fix power: import unlock (Milestone 2) ------------------------- #
+
+
+def test_ensure_import_added_when_missing(tmp_path):
+    """A rule's ensure_import is injected into the file when its fix applies."""
+    p = _write(tmp_path, "token = random.randint(0, 999999)\n")
+    rule = _rule("random", ensure_imports=("import secrets",))
+    matches = find_matches(rule, [p])
+    assert len(matches) == 1
+    agent = FakeAgent(
+        [TransformResult(replacement_code="secrets.randbelow(1000000)", confident=True, reason="token")]
+    )
+
+    results = plan_fixes(agent, matches, tmp_path)
+    new = changed_sources(results)[p]
+
+    assert "import secrets" in new
+    assert "secrets.randbelow(1000000)" in new
+    assert "random.randint" not in new
+    cst.parse_module(new)  # still parses
+
+
+def test_ensure_import_not_duplicated_when_present(tmp_path):
+    p = _write(tmp_path, "import secrets\ntoken = random.randint(0, 9)\n")
+    rule = _rule("random", ensure_imports=("import secrets",))
+    matches = find_matches(rule, [p])
+    agent = FakeAgent(
+        [TransformResult(replacement_code="secrets.randbelow(10)", confident=True, reason="token")]
+    )
+
+    new = changed_sources(plan_fixes(agent, matches, tmp_path))[p]
+    assert new.count("import secrets") == 1
+
+
+def test_ensure_import_skipped_when_no_fix_applies(tmp_path):
+    """No confident fix -> nothing changes, so the import is not added either."""
+    p = _write(tmp_path, "token = random.randint(0, 9)\n")
+    rule = _rule("random", ensure_imports=("import secrets",))
+    matches = find_matches(rule, [p])
+    agent = FakeAgent(
+        [TransformResult(replacement_code="x", confident=False, reason="non-security use")]
+    )
+
+    assert changed_sources(plan_fixes(agent, matches, tmp_path)) == {}
 
 
 # --- Reliability & resilience (Milestone 1) -------------------------------- #

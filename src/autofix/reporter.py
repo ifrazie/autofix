@@ -17,6 +17,7 @@ from pathlib import Path
 
 import typer
 
+from .rules import Rule
 from .transformer import FixResult
 from .verifier import VerifyResult
 
@@ -89,6 +90,19 @@ def summary(matched: int, fixed: int, skipped: int, errored: int = 0) -> None:
 
 def no_fixes() -> None:
     typer.echo("\nNo confident fixes to verify.")
+
+
+def rules_validation(
+    ok: list[tuple[Path, Rule]], bad: list[tuple[Path, str]]
+) -> None:
+    """Report which rule files loaded cleanly and which failed schema checks."""
+
+    for path, rule in ok:
+        typer.secho(f"[OK]   {path}  [{rule.id}]", fg=typer.colors.GREEN)
+    for path, msg in bad:
+        typer.secho(f"[BAD]  {path}", fg=typer.colors.RED, bold=True)
+        typer.echo(f"    {msg}")
+    typer.secho(f"\n{len(ok)} valid, {len(bad)} invalid", bold=True)
 
 
 def verification(vr: VerifyResult) -> None:

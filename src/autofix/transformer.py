@@ -416,11 +416,40 @@ def plan_fixes(
     return [r for r in results if r is not None]
 
 
+def _parse_import(spec: str) -> tuple[str, str | None]:
+    """Split a validated import spec into ``(module, obj_or_None)``.
+
+    ``"import secrets"``            -> ("secrets", None)
+    ``"from hashlib import sha256"`` -> ("hashlib", "sha256")
+    """
+
+    words = spec.split()
+    if words[0] == "import":
+        return words[1], None
+    return words[1], words[3]  # from X import Y (format guaranteed by the loader)
+
+
+def _add_imports(source: str, specs: set[str]) -> str:
+    """Ensure each import spec is present in ``source``, adding it iff missing."""
+
+    from libcst.codemod import CodemodContext
+    from libcst.codemod.visitors import AddImportsVisitor
+
+    context = CodemodContext()
+    for spec in sorted(specs):  # sorted for deterministic output
+        module, obj = _parse_import(spec)
+        AddImportsVisitor.add_needed_import(context, module, obj)
+    tree = cst.parse_module(source)
+    return AddImportsVisitor(context).transform_module(tree).code
+
+
 def changed_sources(results: list[FixResult]) -> dict[Path, str]:
     """Combine all confident fixes per file into the final rewritten source.
 
-    Applies every ``fixed`` replacement for a file at once, so the on-disk result
-    (written later by the verifier) reflects all fixes together.
+    Applies every ``fixed`` replacement for a file at once, then ensures the
+    imports required by the applied rules exist (added only if missing), so the
+    on-disk result (written later by the verifier) reflects all fixes together and
+    stays runnable — e.g. a ``random`` -> ``secrets`` fix also gets ``import secrets``.
     """
 
     fixed_by_file: dict[Path, list[FixResult]] = {}
@@ -436,5 +465,10 @@ def changed_sources(results: list[FixResult]) -> dict[Path, str]:
             # A "fixed" result always carries its replacement code.
             assert r.replacement_code is not None
             replacements[r.match.span] = cst.parse_expression(r.replacement_code)
-        out[path] = apply_to_source(source, replacements)
+        new_source = apply_to_source(source, replacements)
+
+        imports = {imp for r in frs for imp in r.match.rule.ensure_imports}
+        if imports:
+            new_source = _add_imports(new_source, imports)
+        out[path] = new_source
     return out

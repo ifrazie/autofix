@@ -1,21 +1,25 @@
 """Command-line entry point.
 
-    autofix <target> --rule md5.yaml --rule shell.yaml
+    autofix fix <target> --rule md5.yaml --rule shell.yaml
+    autofix fix <target> --rules-dir rules/
+    autofix rules validate --rules-dir rules/
 
-Orchestrates the pipeline: resolve target -> load rules -> find matches -> ask the
-model to transform each (fixing confident matches, skipping ambiguous ones) ->
-verify on a fresh branch with pytest -> report.
+The ``fix`` command orchestrates the pipeline: resolve target -> load rules ->
+find matches -> ask the model to transform each (fixing confident matches,
+skipping ambiguous ones) -> verify on a fresh branch with pytest -> report. The
+``rules`` command group inspects rule files without touching any code.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 
 from . import reporter
 from .matcher import find_matches
-from .rules import RuleError, load_rules
+from .rules import RuleError, gather_rule_paths, load_rule, load_rules
 from .target import TargetError, python_files, resolve_target
 from .transformer import (
     DEFAULT_CONCURRENCY,
@@ -38,9 +42,11 @@ app = typer.Typer(
     add_completion=False,
     help="Rule-driven vulnerability remediation: find and fix a pattern across a Python codebase.",
 )
+rules_app = typer.Typer(add_completion=False, help="Inspect and validate rule files.")
+app.add_typer(rules_app, name="rules")
 
 
-def _fail(msg: str) -> None:
+def _fail(msg: str) -> NoReturn:
     typer.secho(f"error: {msg}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=1)
 
@@ -53,10 +59,26 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the autofix version and exit.",
+    ),
+) -> None:
+    """Rule-driven vulnerability remediation for Python codebases."""
+
+
 @app.command()
-def main(
+def fix(
     target: str = typer.Argument(..., help="Local path or GitHub URL of the repository."),
-    rule: list[Path] = typer.Option(..., "--rule", "-r", help="Rule YAML file (repeatable)."),
+    rule: list[Path] = typer.Option([], "--rule", "-r", help="Rule YAML file (repeatable)."),
+    rules_dir: str = typer.Option(
+        None, "--rules-dir", help="Directory of *.yaml rule files to load (in addition to --rule)."
+    ),
     provider: str = typer.Option(
         DEFAULT_PROVIDER, "--provider", help=f"Model backend: {' | '.join(PROVIDERS)}."
     ),
@@ -77,13 +99,6 @@ def main(
         DEFAULT_MAX_RETRIES, "--max-retries", min=0,
         help="Extra attempts after the first for transient transform failures.",
     ),
-    version: bool = typer.Option(
-        False,
-        "--version",
-        callback=_version_callback,
-        is_eager=True,
-        help="Show the autofix version and exit.",
-    ),
 ) -> None:
     """Find and fix every instance of each rule's pattern in the target."""
 
@@ -92,7 +107,8 @@ def main(
 
     try:
         resolved = resolve_target(target)
-        rules = load_rules([str(p) for p in rule])
+        rule_paths = gather_rule_paths([str(p) for p in rule], rules_dir)
+        rules = load_rules(rule_paths)
     except (TargetError, RuleError) as exc:
         _fail(str(exc))
 
@@ -142,6 +158,33 @@ def main(
         _fail(str(exc))
 
     reporter.verification(vr)
+
+
+@rules_app.command("validate")
+def rules_validate(
+    rule: list[Path] = typer.Option([], "--rule", "-r", help="Rule YAML file (repeatable)."),
+    rules_dir: str = typer.Option(
+        None, "--rules-dir", help="Directory of *.yaml rule files to validate."
+    ),
+) -> None:
+    """Load and schema-check rule files without running a fix."""
+
+    try:
+        rule_paths = gather_rule_paths([str(p) for p in rule], rules_dir)
+    except RuleError as exc:
+        _fail(str(exc))
+
+    ok = []
+    bad = []
+    for path in rule_paths:
+        try:
+            ok.append((path, load_rule(path)))
+        except RuleError as exc:
+            bad.append((path, str(exc)))
+
+    reporter.rules_validation(ok, bad)
+    if bad:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

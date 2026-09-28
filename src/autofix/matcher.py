@@ -60,6 +60,21 @@ def _func_names(func: cst.BaseExpression) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _full_dotted_name(func: cst.BaseExpression) -> str | None:
+    """Return the full dotted path of a call's function, e.g. ``yaml.load``.
+
+    Returns ``None`` for anything not made purely of names/attributes (e.g. a call
+    on a subscript or another call), so a dotted ``call:`` spec matches exactly.
+    """
+
+    if isinstance(func, cst.Name):
+        return func.value
+    if isinstance(func, cst.Attribute):
+        base = _full_dotted_name(func.value)
+        return f"{base}.{func.attr.value}" if base is not None else None
+    return None
+
+
 def _literal_matches(node: cst.BaseExpression, expected: Any) -> bool:
     """Does a libcst literal node equal the expected YAML scalar?"""
 
@@ -78,11 +93,29 @@ def _literal_matches(node: cst.BaseExpression, expected: Any) -> bool:
 
 
 def call_matches(node: cst.Call, spec: MatchSpec) -> bool:
-    """Does one call node satisfy the match spec (call name + keyword constraints)?"""
+    """Does one call node satisfy the match spec (name + positional/keyword args)?
 
-    root, final = _func_names(node.func)
-    if spec.call not in (root, final):
-        return False
+    A dotted ``spec.call`` (``yaml.load``) matches the full attribute path exactly;
+    a bare name (``md5``) matches either the root or final name.
+    """
+
+    if "." in spec.call:
+        if _full_dotted_name(node.func) != spec.call:
+            return False
+    else:
+        root, final = _func_names(node.func)
+        if spec.call not in (root, final):
+            return False
+
+    if spec.args:
+        positional = [a for a in node.args if a.keyword is None and a.star == ""]
+        if len(positional) < len(spec.args):
+            return False
+        for constraint, arg in zip(spec.args, positional, strict=False):
+            if constraint is None:  # None = "any value must be present here"
+                continue
+            if not _literal_matches(arg.value, constraint):
+                return False
 
     for kw_name, kw_value in spec.keyword.items():
         found = False
