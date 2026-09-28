@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autofix — App Map</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #ffffff; --ink: #1a1a17; --muted: #6b6b63;
+    --line: #e4e3dd; --accent: #2f6f4f; --accent-soft: #e7f0ea;
+    --ai: #7a4fd6; --ai-soft: #efe9fb; --warn: #b4791f; --code: #3a3a34;
+    --shadow: 0 1px 2px rgba(0,0,0,.05), 0 3px 12px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --panel: #1f2124; --ink: #e9e9e4; --muted: #9a9a92;
+      --line: #33353a; --accent: #6fd6a2; --accent-soft: #17322475;
+      --ai: #b79bf2; --ai-soft: #2a213f75; --warn: #e0b25a; --code: #c9c9c1;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 3px 14px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 72px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 30px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.02em; }
+  .thesis { color: var(--muted); font-size: 16px; margin: 0; max-width: 62ch; }
+  .tag { display: inline-block; font-size: 12px; color: var(--accent); background: var(--accent-soft);
+         border: 1px solid var(--line); padding: 2px 9px; border-radius: 999px; margin-top: 12px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+       margin: 38px 0 16px; font-weight: 700; }
+  code, .mono { font-family: "SF Mono", ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 13px; }
+  code { color: var(--code); background: rgba(128,128,128,.1); padding: 1px 5px; border-radius: 4px; }
+
+  /* Pipeline */
+  .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+  .stage {
+    flex: 1 1 140px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; box-shadow: var(--shadow); position: relative; min-width: 140px;
+  }
+  .stage .n { font-size: 11px; color: var(--muted); font-weight: 700; }
+  .stage h3 { margin: 3px 0 5px; font-size: 15px; }
+  .stage p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .stage .file { margin-top: 9px; }
+  .stage.ai { border-color: var(--ai); background: var(--ai-soft); }
+  .stage.ai h3 { color: var(--ai); }
+  .arrow { align-self: center; color: var(--muted); font-size: 18px; flex: 0 0 auto; }
+  @media (max-width: 720px) { .arrow { transform: rotate(90deg); } }
+
+  /* Component grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .card h3 { margin: 0 0 3px; font-size: 15px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .card h3 .loc { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .card p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+  .det { color: var(--accent); font-weight: 600; font-size: 11px; }
+  .aim { color: var(--ai); font-weight: 600; font-size: 11px; }
+
+  /* Data model chain */
+  .chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .pill { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; box-shadow: var(--shadow); }
+  .pill b { font-size: 13.5px; } .pill span { display: block; font-size: 11.5px; color: var(--muted); }
+  .chain .arrow { transform: none; }
+
+  /* Decisions */
+  .dec { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 0 0 16px; }
+  .dec.ai-d { border-color: var(--ai); }
+  .dec b { display: block; margin-bottom: 2px; }
+  .dec p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+  .practice { background: var(--accent-soft); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .practice h3 { margin: 0 0 8px; color: var(--accent); font-size: 15px; }
+  .practice p { margin: 0 0 8px; font-size: 14px; }
+  .practice ol { margin: 8px 0 0; padding-left: 20px; font-size: 14px; }
+  .practice li { margin-bottom: 4px; }
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Autofix</h1>
+    <p class="thesis">A rule-driven vulnerability remediation engine. You hand it a <em>rule</em> — a vulnerable
+    pattern plus its known-good fix — and a Python repo; it finds every instance, asks an AI model for a
+    context-aware fix at each site, verifies on a fresh branch with the test suite, and hands back a reviewable diff.</p>
+    <span class="tag">Kernel: pluggable rule data, not hardcoded logic — new vuln class = new YAML file</span>
+  </header>
+
+  <h2>The pipeline (execution order)</h2>
+  <div class="flow">
+    <div class="stage"><div class="n">1</div><h3>Target</h3><p>Local path in place; URL → shallow clone.</p><div class="file"><code>target.py</code></div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="n">2</div><h3>Rules</h3><p>YAML → validated <code>Rule</code> data.</p><div class="file"><code>rules.py</code></div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="n">3</div><h3>Matcher</h3><p>libcst walk → exact match sites. No AI.</p><div class="file"><code>matcher.py</code></div></div>
+    <div class="arrow">→</div>
+    <div class="stage ai"><div class="n">4</div><h3>Transformer</h3><p>Snippet → structured fix. Confident→splice, else skip.</p><div class="file"><code>transformer.py</code></div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="n">5</div><h3>Verifier</h3><p>Fresh branch, commit, run pytest, culprit on red.</p><div class="file"><code>verifier.py</code></div></div>
+    <div class="arrow">→</div>
+    <div class="stage"><div class="n">6</div><h3>Reporter</h3><p>Breakdown, rationale, diff, counts.</p><div class="file"><code>reporter.py</code></div></div>
+  </div>
+  <p style="margin-top:14px; font-size:13px; color:var(--muted)"><span class="det">■ deterministic</span> &nbsp; <span class="aim">■ the AI, on a short leash</span> &nbsp;—&nbsp; only stage 4 involves a model; everything else is plain, testable Python.</p>
+
+  <h2>Components</h2>
+  <div class="grid">
+    <div class="card"><h3>Target loader <span class="loc">target.py · 72 loc</span></h3><span class="det">DETERMINISTIC</span><p>Resolves the target to a working dir; clones remote URLs. Skips <code>.git</code>/<code>.venv</code>/<code>__pycache__</code> when listing <code>.py</code> files.</p></div>
+    <div class="card"><h3>Rule loader <span class="loc">rules.py · 102 loc</span></h3><span class="det">DETERMINISTIC</span><p>Parses + validates each YAML rule into a frozen <code>Rule</code>. The <code>match</code> block is a tiny DSL: <code>call</code> name + optional <code>keyword</code> constraints. Clear errors, no stack traces.</p></div>
+    <div class="card"><h3>Matcher <span class="loc">matcher.py · 141 loc</span></h3><span class="det">DETERMINISTIC</span><p>Compiles the DSL to a libcst visitor; resolves <code>md5()</code> and <code>hashlib.md5()</code> alike. Each <code>Match</code> carries its full start+end <b>span</b> — the key to precise splicing.</p></div>
+    <div class="card"><h3>Transformer <span class="loc">transformer.py · 336 loc</span></h3><span class="aim">AI · SHORT LEASH</span><p>Per match: one call expression + read-only context → <code>strands-agents</code> structured output <code>{replacement, confident, reason}</code>. Our code splices via libcst only if confident and parseable. Pluggable provider: Bedrock (default) or Ollama.</p></div>
+    <div class="card"><h3>Verifier <span class="loc">verifier.py · 156 loc</span></h3><span class="det">DETERMINISTIC</span><p>Lands fixes on <code>autofix/&lt;timestamp&gt;</code>, commits, runs <code>pytest</code>. Standalone repos branch in place; nested targets are copied + <code>git init</code>'d, so your tree is never touched. Names the likely culprit on red.</p></div>
+    <div class="card"><h3>Reporter <span class="loc">reporter.py · 106 loc</span></h3><span class="det">DETERMINISTIC</span><p>Per-fix breakdown with rule rationale, colorized inline diff, counts, zero-match message, culprit callout. Color degrades when piped; ASCII-only for cross-console safety.</p></div>
+  </div>
+
+  <h2>Data model — nothing persists but the branch</h2>
+  <div class="chain">
+    <div class="pill"><b>Rule</b><span>from YAML</span></div>
+    <div class="arrow">→</div>
+    <div class="pill"><b>Match</b><span>site + span</span></div>
+    <div class="arrow">→</div>
+    <div class="pill"><b>FixResult</b><span>fixed / skipped</span></div>
+    <div class="arrow">→</div>
+    <div class="pill"><b>VerifyResult</b><span>branch + pass/fail</span></div>
+    <div class="arrow">→</div>
+    <div class="pill" style="border-color:var(--accent)"><b>git branch</b><span>the only durable output</span></div>
+  </div>
+
+  <h2>Decisions that shaped the code</h2>
+  <div class="dec"><b>libcst over stdlib <code>ast</code></b><p>A concrete syntax tree preserves formatting, so a fix produces a one-line diff instead of a reformatted file. The heavier API is the price of the "just read the clean diff" promise.</p></div>
+  <div class="dec ai-d"><b>The AI on a short leash — one snippet in, one structured object out</b><p>The model only judges <em>this site</em>; our code owns splicing, skipping, branching, and testing. That fence is what makes "AI edits your codebase" trustworthy.</p></div>
+  <div class="dec ai-d"><b>Pluggable provider, default AWS Bedrock (Claude Sonnet 4.5), Ollama retained</b><p>The confident-vs-skip judgment was the real risk; two local models got it wrong in opposite directions. The identical <code>structured_output</code> path behind both backends made the swap nearly free.</p></div>
+  <div class="dec"><b>Key replacements by full span; strip redundant trailing methods</b><p>A nested <code>md5(...)</code> and its outer <code>.hexdigest()</code> share a start position — start-only keying replaced the wrong node. Both edge cases are pinned by regression tests.</p></div>
+  <div class="dec"><b>Verify in an isolated copy for non-repo targets</b><p>Branching in place on a target nested inside another repo would corrupt the parent. Copy + <code>git init</code> keeps the demo safe and mirrors the clone-URL path.</p></div>
+
+  <h2>A practice to reuse</h2>
+  <div class="practice">
+    <h3>Fence the AI, own the mechanics</h3>
+    <p>Autofix's trust comes from a boundary you can redraw in any AI feature: let the model make the <em>one</em> judgment only it can, and keep everything verifiable in ordinary code around it.</p>
+    <ol>
+      <li><b>Name the single judgment.</b> Here: "is this specific call a real fix or a false positive?" — not "rewrite my file."</li>
+      <li><b>Demand structured output.</b> A typed <code>{result, confident, reason}</code> (pydantic) turns free text into something your code can branch on.</li>
+      <li><b>Validate before you act.</b> Parse the model's output; on failure, skip and record — never corrupt state on bad output.</li>
+      <li><b>Prove it deterministically.</b> Wrap the edit in a branch + test run so the AI's proposal arrives with evidence, not just confidence.</li>
+    </ol>
+  </div>
+
+  <footer>
+    Generated from the finished Autofix codebase · deterministic engine + a fenced AI transform · 2 shipped rules (<code>md5.yaml</code>, <code>shell.yaml</code>) · 22 passing tests.
+  </footer>
+
+</div>
+</body>
+</html>
