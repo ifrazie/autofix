@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -370,6 +371,7 @@ def plan_fixes(
     concurrency: int = DEFAULT_CONCURRENCY,
     timeout: float = DEFAULT_TIMEOUT,
     max_retries: int = DEFAULT_MAX_RETRIES,
+    on_result: Callable[[FixResult], None] | None = None,
 ) -> list[FixResult]:
     """Ask the model about every match and decide fixed / skipped / error.
 
@@ -382,7 +384,8 @@ def plan_fixes(
 
     Matches are transformed concurrently (bounded by ``concurrency``); each match
     has an overall ``timeout`` budget covering its retries. Results are returned in
-    match order regardless of completion order.
+    match order regardless of completion order. ``on_result`` (if given) is called
+    once per match as it finishes — in completion order — for progress reporting.
     """
 
     if not matches:
@@ -405,13 +408,14 @@ def plan_fixes(
             m, source, _ctx = prepared[i]
             try:
                 tr = fut.result(timeout=timeout)
+                result = _finalize(tr, m, source, root)
             except FutureTimeoutError:
-                results[i] = FixResult(m, "error", f"transform timed out after {timeout:g}s")
-                continue
+                result = FixResult(m, "error", f"transform timed out after {timeout:g}s")
             except Exception as exc:  # isolate a provider failure to just this match
-                results[i] = FixResult(m, "error", f"transform failed: {exc}")
-                continue
-            results[i] = _finalize(tr, m, source, root)
+                result = FixResult(m, "error", f"transform failed: {exc}")
+            results[i] = result
+            if on_result is not None:
+                on_result(result)
 
     return [r for r in results if r is not None]
 
@@ -472,3 +476,73 @@ def changed_sources(results: list[FixResult]) -> dict[Path, str]:
             new_source = _add_imports(new_source, imports)
         out[path] = new_source
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Cost / usage estimate
+# --------------------------------------------------------------------------- #
+
+# strands' structured_output path returns only the parsed object, not provider
+# token counts, so we can't read exact usage. We estimate it from the text we sent
+# and got back with the common ~4-chars-per-token rule of thumb; the estimate is
+# always labeled approximate so it is never mistaken for a billed figure.
+_CHARS_PER_TOKEN = 4
+
+
+@dataclass
+class UsageEstimate:
+    """A rough, clearly-approximate accounting of one run's model traffic."""
+
+    calls: int
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+def _tokens_from_chars(chars: int) -> int:
+    return -(-chars // _CHARS_PER_TOKEN)  # ceil div; any non-empty text costs >0
+
+
+def estimate_usage(matches: list[Match], results: list[FixResult]) -> UsageEstimate:
+    """Estimate the tokens a run sent/received, from the prompt and model text.
+
+    Reconstructs each prompt exactly as :func:`plan_fixes` built it, plus the
+    text the model returned (replacement + reason), so the figure tracks real
+    traffic without needing provider metrics. Approximate by construction.
+    """
+
+    source_cache: dict[Path, str] = {}
+    input_chars = 0
+    output_chars = 0
+    for m, r in zip(matches, results, strict=False):
+        source = source_cache.setdefault(m.file_path, m.file_path.read_text(encoding="utf-8"))
+        context = _context_for(source, m.line)
+        input_chars += len(_build_prompt(m.rule.transform_prompt, m.snippet, context))
+        output_chars += len(r.replacement_code or "") + len(r.reason or "")
+
+    return UsageEstimate(
+        calls=len(results),
+        input_tokens=_tokens_from_chars(input_chars),
+        output_tokens=_tokens_from_chars(output_chars),
+    )
+
+
+# Approximate public list prices, USD per 1M tokens, as (input, output). A rough
+# ballpark for one run's cost — never a billing source of truth. Providers with no
+# entry (e.g. Ollama, which runs locally) have no API cost.
+_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
+    "bedrock": (3.0, 15.0),  # Claude Sonnet 4.5 list-price tier
+}
+
+
+def estimated_cost_usd(usage: UsageEstimate, provider: str) -> float | None:
+    """Approximate USD cost for a run, or ``None`` when the provider is free/local."""
+
+    price = _PRICES_PER_MTOK.get(provider)
+    if price is None:
+        return None
+    in_rate, out_rate = price
+    return (usage.input_tokens * in_rate + usage.output_tokens * out_rate) / 1_000_000

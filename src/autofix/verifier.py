@@ -41,9 +41,10 @@ class VerifyResult:
     branch: str                # autofix/<timestamp>
     isolated: bool             # True if we worked in a temp copy
     committed: list[str]       # relative paths of files written and committed
-    passed: bool               # did pytest come back green?
+    passed: bool               # did pytest come back green? (True when tests skipped)
     pytest_output: str         # captured pytest stdout+stderr
     culprits: list[str] = field(default_factory=list)  # likely-culprit paths on red
+    tests_ran: bool = True     # False when --no-test skipped the pytest step
 
 
 def _git(workspace: Path, *args: str) -> subprocess.CompletedProcess:
@@ -111,13 +112,20 @@ def _guess_culprits(pytest_output: str, changed_files: list[str]) -> list[str]:
 
 
 def verify(
-    target: Path, changed: dict[Path, str], root: Path, test_path: str = "."
+    target: Path,
+    changed: dict[Path, str],
+    root: Path,
+    test_path: str = ".",
+    *,
+    run_tests: bool = True,
 ) -> VerifyResult:
     """Apply ``changed`` sources on a fresh branch, commit, and run ``pytest``.
 
     ``changed`` maps original file paths to their rewritten source; ``root`` is the
     target root those paths are relative to. Returns a :class:`VerifyResult`; the
-    branch is always left intact for inspection.
+    branch is always left intact for inspection. With ``run_tests=False`` (the
+    ``--no-test`` mode) the fixes are still branched and committed, but pytest is
+    skipped and the result is reported as passing-by-omission.
     """
 
     workspace, isolated = _prepare_workspace(target)
@@ -143,17 +151,22 @@ def verify(
     if commit.returncode != 0:
         raise VerifierError(f"commit failed: {commit.stderr.strip()}")
 
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-rfE", test_path],
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-    )
-    passed = proc.returncode == 0
-    output = proc.stdout + proc.stderr
-    culprits = [] if passed else _guess_culprits(output, committed)
+    if run_tests:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-rfE", test_path],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        passed = proc.returncode == 0
+        output = proc.stdout + proc.stderr
+        culprits = [] if passed else _guess_culprits(output, committed)
+    else:
+        passed, output, culprits = True, "", []
 
     if not isolated:  # leave the user on their original branch; autofix branch stays
         _git(workspace, "checkout", base_branch)
 
-    return VerifyResult(workspace, branch, isolated, committed, passed, output, culprits)
+    return VerifyResult(
+        workspace, branch, isolated, committed, passed, output, culprits, tests_ran=run_tests
+    )

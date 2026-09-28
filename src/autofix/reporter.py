@@ -13,12 +13,13 @@ readable. Output is kept ASCII-only so it renders on every console encoding
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
 
 from .rules import Rule
-from .transformer import FixResult
+from .transformer import FixResult, UsageEstimate, estimated_cost_usd
 from .verifier import VerifyResult
 
 
@@ -88,8 +89,40 @@ def summary(matched: int, fixed: int, skipped: int, errored: int = 0) -> None:
     typer.secho(line, bold=True)
 
 
+def cost(usage: UsageEstimate, provider: str) -> None:
+    """A single, clearly-approximate usage/cost line for the run."""
+
+    line = (
+        f"Usage (approx): {usage.input_tokens} in + {usage.output_tokens} out tokens "
+        f"over {usage.calls} call(s)"
+    )
+    est = estimated_cost_usd(usage, provider)
+    if est is None:
+        line += f" - {provider} runs locally, no API cost."
+    else:
+        line += f" - est. ${est:.4f} ({provider}, approximate)."
+    typer.secho(line)
+
+
+def dry_run_note() -> None:
+    typer.secho(
+        "\nDry run: no files written, no branch created, no tests run.",
+        fg=typer.colors.YELLOW,
+        bold=True,
+    )
+
+
 def no_fixes() -> None:
     typer.echo("\nNo confident fixes to verify.")
+
+
+def rules_list(rules: list[Rule]) -> None:
+    """List loaded rules with id, match target, and rationale."""
+
+    for rule in rules:
+        typer.secho(f"[{rule.id}]  match: {rule.match.call}", fg=typer.colors.CYAN, bold=True)
+        typer.echo(f"    {rule.rationale}")
+    typer.secho(f"\n{len(rules)} rule(s)", bold=True)
 
 
 def rules_validation(
@@ -112,6 +145,10 @@ def verification(vr: VerifyResult) -> None:
     typer.echo("\nVerifying on a fresh branch...")
     typer.echo(f"Branch {vr.branch} - {len(vr.committed)} file(s) committed in {where}")
 
+    if not vr.tests_ran:
+        typer.secho("Tests: SKIPPED (--no-test)", fg=typer.colors.YELLOW, bold=True)
+        return
+
     if vr.passed:
         typer.secho("Tests: PASS", fg=typer.colors.GREEN, bold=True)
         return
@@ -122,3 +159,66 @@ def verification(vr: VerifyResult) -> None:
         for c in vr.culprits:
             typer.secho(f"    {c}", fg=typer.colors.RED, bold=True)
     typer.echo(f"Branch left intact for inspection: {vr.workspace}")
+
+
+def json_report(
+    results: list[FixResult],
+    root: Path,
+    provider: str,
+    *,
+    verify_result: VerifyResult | None = None,
+    usage: UsageEstimate | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Render the run as a machine-readable JSON string (for CI / piping).
+
+    Mirrors the human report's information: per-match outcomes, summary counts,
+    the verification result when one ran, and the approximate usage/cost.
+    """
+
+    counts = {"fixed": 0, "skipped": 0, "error": 0}
+    entries = []
+    for r in results:
+        counts[r.status] = counts.get(r.status, 0) + 1
+        entries.append(
+            {
+                "file": r.match.file_path.relative_to(root).as_posix(),
+                "line": r.match.line,
+                "rule": r.match.rule.id,
+                "status": r.status,
+                "reason": r.reason,
+            }
+        )
+
+    payload: dict = {
+        "dry_run": dry_run,
+        "summary": {
+            "matched": len(results),
+            "fixed": counts["fixed"],
+            "skipped": counts["skipped"],
+            "errored": counts["error"],
+        },
+        "results": entries,
+    }
+
+    if verify_result is not None:
+        payload["verification"] = {
+            "branch": verify_result.branch,
+            "workspace": str(verify_result.workspace),
+            "isolated": verify_result.isolated,
+            "tests_ran": verify_result.tests_ran,
+            "passed": verify_result.passed,
+            "committed": verify_result.committed,
+            "culprits": verify_result.culprits,
+        }
+
+    if usage is not None:
+        payload["usage"] = {
+            "calls": usage.calls,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "estimated_cost_usd": estimated_cost_usd(usage, provider),
+            "approximate": True,
+        }
+
+    return json.dumps(payload, indent=2)

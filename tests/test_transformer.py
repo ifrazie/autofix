@@ -10,6 +10,8 @@ from autofix.transformer import (
     TransformResult,
     apply_to_source,
     changed_sources,
+    estimate_usage,
+    estimated_cost_usd,
     plan_fixes,
 )
 
@@ -157,6 +159,37 @@ def test_ensure_import_skipped_when_no_fix_applies(tmp_path):
     )
 
     assert changed_sources(plan_fixes(agent, matches, tmp_path)) == {}
+
+
+# --- CLI UX & config: usage estimate (Milestone 3) ------------------------ #
+
+
+def test_estimate_usage_counts_calls_and_scales_with_output(tmp_path):
+    p = _write(tmp_path, "import hashlib\nx = hashlib.md5(b'a')\n")
+    matches = find_matches(_rule("md5"), [p])
+    agent = FakeAgent([_ok()])
+
+    results = plan_fixes(agent, matches, tmp_path)
+    usage = estimate_usage(matches, results)
+
+    assert usage.calls == 1
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+def test_estimated_cost_none_for_local_provider():
+    usage = estimate_usage([], [])
+    assert estimated_cost_usd(usage, "ollama") is None
+
+
+def test_estimated_cost_positive_for_bedrock():
+    from autofix.transformer import UsageEstimate
+
+    cost = estimated_cost_usd(
+        UsageEstimate(calls=2, input_tokens=1000, output_tokens=500), "bedrock"
+    )
+    assert cost is not None and cost > 0
 
 
 # --- Reliability & resilience (Milestone 1) -------------------------------- #
