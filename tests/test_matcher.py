@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from autofix.matcher import find_matches
+from autofix.matcher import find_matches, scan
 from autofix.rules import MatchSpec, Rule, load_rule
 from autofix.target import python_files
 
@@ -93,6 +93,80 @@ def test_seeded_sample_repo_counts_are_exact():
     md5_rule = load_rule(ROOT / "rules" / "md5.yaml")
     shell_rule = load_rule(ROOT / "rules" / "shell.yaml")
     # Planted: auth, tokens, signatures, integrity, cache = 5 md5 calls.
+    # (Matching is purely structural; whether each is fixed, migrated, or left
+    # alone is the confident/skip decision made later, not here.)
     assert len(find_matches(md5_rule, files)) == 5
-    # Planted: deploy, backup, tasks = 3 subprocess shell=True calls.
-    assert len(find_matches(shell_rule, files)) == 3
+    # Planted: deploy, backup, tasks, pipeline = 4 subprocess shell=True calls
+    # (pipeline uses a shell pipe and is matched but not auto-fixable).
+    assert len(find_matches(shell_rule, files)) == 4
+
+
+# --- Import/alias resolution & scan coverage (P1 item 6) ------------------- #
+
+
+def test_module_alias_is_resolved(tmp_path):
+    """`import subprocess as sp` makes sp.run(...) match a subprocess rule."""
+    files = _write_py(
+        tmp_path,
+        "import subprocess as sp\nsp.run('x', shell=True)\n",
+    )
+    matches = find_matches(_rule("subprocess", {"shell": True}), files)
+    assert len(matches) == 1
+
+
+def test_from_import_alias_is_resolved(tmp_path):
+    """`from hashlib import md5 as h` makes a bare h(...) match an md5 rule."""
+    files = _write_py(tmp_path, "from hashlib import md5 as h\nx = h(b'a')\n")
+    matches = find_matches(_rule("md5"), files)
+    assert len(matches) == 1
+
+
+def test_dotted_rule_matches_through_module_alias(tmp_path):
+    """A dotted `yaml.load` rule matches `y.load(...)` when `import yaml as y`."""
+    files = _write_py(tmp_path, "import yaml as y\na = y.load(s)\n")
+    matches = find_matches(_rule("yaml.load"), files)
+    assert len(matches) == 1
+
+
+def test_unrelated_method_name_is_not_a_false_positive(tmp_path):
+    """A dotted rule must not match a same-named method on an unrelated object."""
+    files = _write_py(
+        tmp_path,
+        "import yaml\n"
+        "class Store:\n"
+        "    def load(self): ...\n"
+        "s = Store()\n"
+        "s.load()\n",      # Store.load, NOT yaml.load
+    )
+    matches = find_matches(_rule("yaml.load"), files)
+    assert matches == []
+
+
+def test_scan_reports_unparseable_file(tmp_path):
+    good = tmp_path / "good.py"
+    good.write_text("import hashlib\nx = hashlib.md5(b'a')\n", encoding="utf-8")
+    bad = tmp_path / "bad.py"
+    bad.write_text("def oops(:\n", encoding="utf-8")  # syntax error
+
+    result = scan([_rule("md5")], [good, bad])
+    assert len(result.matches) == 1
+    assert len(result.unreadable) == 1
+    assert result.unreadable[0][0] == bad
+    assert "parse" in result.unreadable[0][1]
+
+
+def test_scan_parses_each_file_once_for_many_rules(tmp_path, monkeypatch):
+    import autofix.matcher as matcher
+
+    p = _write_py(tmp_path, "import hashlib\nx = hashlib.md5(b'a')\n")
+    calls = {"n": 0}
+    real_parse = matcher.cst.parse_module
+
+    def counting_parse(src):
+        calls["n"] += 1
+        return real_parse(src)
+
+    monkeypatch.setattr(matcher.cst, "parse_module", counting_parse)
+    rules = [_rule("md5"), _rule("sha256"), _rule("subprocess")]
+    scan(rules, p)
+    assert calls["n"] == 1  # one file -> parsed once regardless of rule count

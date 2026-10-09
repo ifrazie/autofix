@@ -13,6 +13,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
 
@@ -60,13 +61,36 @@ def resolve_target(target: str) -> Target:
     return Target(path=path, is_temporary=False)
 
 
-def python_files(root: Path) -> list[Path]:
-    """Every ``.py`` file under ``root``, skipping virtualenvs and VCS dirs."""
+def python_files(
+    root: Path,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> list[Path]:
+    """Every ``.py`` file under ``root``, skipping virtualenvs and VCS dirs.
+
+    ``include``/``exclude`` are optional lists of glob patterns, matched against
+    each file's path relative to ``root`` (posix form) with :func:`fnmatch.fnmatch`
+    semantics — note that ``*`` matches across ``/`` here, so ``app/*`` and
+    ``app/**`` both mean "anything under ``app/``". When ``include`` is given, a
+    file must match at least one include pattern to be scanned; any file matching
+    an ``exclude`` pattern is dropped (exclude wins over include). This lets a run
+    target just ``app/*`` or skip ``*/migrations/*`` without the engine hard-coding
+    project layout.
+    """
 
     skip = {".git", ".venv", "venv", "__pycache__", ".tox", "node_modules"}
+    include = include or []
+    exclude = exclude or []
     files: list[Path] = []
     for p in sorted(root.rglob("*.py")):
-        if any(part in skip for part in p.relative_to(root).parts):
+        rel = p.relative_to(root)
+        if any(part in skip for part in rel.parts):
+            continue
+        rel_posix = rel.as_posix()
+        if include and not any(fnmatch(rel_posix, pat) for pat in include):
+            continue
+        if any(fnmatch(rel_posix, pat) for pat in exclude):
             continue
         files.append(p)
     return files

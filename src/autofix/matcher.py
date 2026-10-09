@@ -75,6 +75,63 @@ def _full_dotted_name(func: cst.BaseExpression) -> str | None:
     return None
 
 
+class _ImportBindings(cst.CSTVisitor):
+    """Collect the import bindings in a module so aliases resolve to real names.
+
+    Produces two maps:
+
+    * ``modules`` — a local name bound to a module path, covering ``import x`` and
+      ``import x.y as z`` (so ``z`` -> ``x.y``, and ``sp`` -> ``subprocess`` for
+      ``import subprocess as sp``).
+    * ``names`` — a local name bound to a ``module.attr`` pair, covering
+      ``from m import f`` and ``from m import f as g`` (so ``g`` -> ``("m", "f")``).
+
+    These let the matcher see through aliases: ``import subprocess as sp`` makes
+    ``sp.run(...)`` match a ``subprocess`` rule, and ``from hashlib import md5 as
+    h`` makes ``h(...)`` match an ``md5`` rule — without matching an unrelated
+    object that merely happens to share the method name.
+    """
+
+    def __init__(self) -> None:
+        self.modules: dict[str, str] = {}
+        self.names: dict[str, tuple[str, str]] = {}
+
+    def visit_Import(self, node: cst.Import) -> None:
+        for alias in node.names:
+            dotted = _full_dotted_name(alias.name)
+            if dotted is None:
+                continue
+            if alias.asname is not None and isinstance(alias.asname.name, cst.Name):
+                self.modules[alias.asname.name.value] = dotted
+            else:
+                # ``import x.y`` binds the top-level name ``x`` locally.
+                self.modules[dotted.split(".")[0]] = dotted.split(".")[0]
+
+    def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
+        if node.module is None or isinstance(node.names, cst.ImportStar):
+            return
+        module = _full_dotted_name(node.module)
+        if module is None:
+            return
+        for alias in node.names:
+            if not isinstance(alias.name, cst.Name):
+                continue
+            imported = alias.name.value
+            local = (
+                alias.asname.name.value
+                if alias.asname is not None and isinstance(alias.asname.name, cst.Name)
+                else imported
+            )
+            self.names[local] = (module, imported)
+
+
+def collect_import_bindings(module: cst.Module) -> _ImportBindings:
+    """Walk a parsed module and return its import bindings."""
+    bindings = _ImportBindings()
+    module.visit(bindings)
+    return bindings
+
+
 def _literal_matches(node: cst.BaseExpression, expected: Any) -> bool:
     """Does a libcst literal node equal the expected YAML scalar?"""
 
@@ -92,18 +149,59 @@ def _literal_matches(node: cst.BaseExpression, expected: Any) -> bool:
     return False
 
 
-def call_matches(node: cst.Call, spec: MatchSpec) -> bool:
+def _resolved_names(
+    func: cst.BaseExpression, bindings: _ImportBindings
+) -> tuple[str | None, str | None, str | None]:
+    """Return ``(root, final, dotted)`` for a call's function, alias-resolved.
+
+    ``root``/``final`` are the (possibly alias-resolved) first and last name of the
+    call target; ``dotted`` is its full resolved dotted path when it is a plain
+    name/attribute chain, else ``None``.
+
+    Resolution rules:
+    * ``sp.run`` with ``import subprocess as sp`` -> root ``subprocess``, dotted
+      ``subprocess.run``.
+    * ``h(...)`` with ``from hashlib import md5 as h`` -> root/final ``md5``,
+      dotted ``hashlib.md5``.
+    """
+
+    raw_root, raw_final = _func_names(func)
+    raw_dotted = _full_dotted_name(func)
+
+    # ``from m import f as g`` -> a bare call g(...) resolves to m.f.
+    if isinstance(func, cst.Name) and func.value in bindings.names:
+        module, imported = bindings.names[func.value]
+        return module.split(".")[0], imported, f"{module}.{imported}"
+
+    # ``import m as alias`` (or ``import m``) -> alias.attr resolves to m.attr.
+    if raw_root is not None and raw_root in bindings.modules:
+        real_root = bindings.modules[raw_root]
+        if raw_dotted is not None:
+            resolved_dotted = real_root + raw_dotted[len(raw_root):]
+            return real_root.split(".")[0], raw_final, resolved_dotted
+        return real_root.split(".")[0], raw_final, None
+
+    return raw_root, raw_final, raw_dotted
+
+
+def call_matches(
+    node: cst.Call, spec: MatchSpec, bindings: _ImportBindings | None = None
+) -> bool:
     """Does one call node satisfy the match spec (name + positional/keyword args)?
 
     A dotted ``spec.call`` (``yaml.load``) matches the full attribute path exactly;
-    a bare name (``md5``) matches either the root or final name.
+    a bare name (``md5``) matches either the root or final name. When ``bindings``
+    is supplied, import aliases are resolved first, so ``sp.run`` matches a
+    ``subprocess`` rule and ``from hashlib import md5 as h`` makes ``h(...)`` match.
     """
 
+    bindings = bindings or _ImportBindings()
+    root, final, dotted = _resolved_names(node.func, bindings)
+
     if "." in spec.call:
-        if _full_dotted_name(node.func) != spec.call:
+        if dotted != spec.call:
             return False
     else:
-        root, final = _func_names(node.func)
         if spec.call not in (root, final):
             return False
 
@@ -130,45 +228,86 @@ def call_matches(node: cst.Call, spec: MatchSpec) -> bool:
 
 
 class _MatchCollector(cst.CSTVisitor):
+    """Collect matches for several rules in one pass over a parsed module.
+
+    Walking the tree once and testing every rule per call node means each file is
+    parsed a single time no matter how many rules are loaded (the previous design
+    re-parsed every file once per rule).
+    """
+
     METADATA_DEPENDENCIES = (PositionProvider,)
 
-    def __init__(self, rule: Rule, file_path: Path, source: str) -> None:
-        self.rule = rule
+    def __init__(
+        self, rules: list[Rule], file_path: Path, bindings: _ImportBindings
+    ) -> None:
+        self.rules = rules
         self.file_path = file_path
-        self._source_lines = source.splitlines()
+        self.bindings = bindings
         self.matches: list[Match] = []
 
     def visit_Call(self, node: cst.Call) -> None:
-        if not call_matches(node, self.rule.match):
+        matched = [r for r in self.rules if call_matches(node, r.match, self.bindings)]
+        if not matched:
             return
         pos = self.get_metadata(PositionProvider, node)
         snippet = cst.Module(body=[]).code_for_node(node)
-        self.matches.append(
-            Match(
-                rule=self.rule,
-                file_path=self.file_path,
-                line=pos.start.line,
-                column=pos.start.column,
-                end_line=pos.end.line,
-                end_column=pos.end.column,
-                node=node,
-                snippet=snippet,
+        for rule in matched:
+            self.matches.append(
+                Match(
+                    rule=rule,
+                    file_path=self.file_path,
+                    line=pos.start.line,
+                    column=pos.start.column,
+                    end_line=pos.end.line,
+                    end_column=pos.end.column,
+                    node=node,
+                    snippet=snippet,
+                )
             )
-        )
 
 
-def find_matches(rule: Rule, files: list[Path]) -> list[Match]:
-    """Find every instance of ``rule``'s pattern across ``files``."""
+@dataclass
+class ScanResult:
+    """Everything one scan produced: matches plus files that could not be read."""
 
-    results: list[Match] = []
+    matches: list[Match]
+    unreadable: list[tuple[Path, str]]  # (path, reason) for files skipped
+
+
+def scan(rules: list[Rule], files: list[Path]) -> ScanResult:
+    """Find every match of every rule across ``files``, parsing each file once.
+
+    Files that can't be read or parsed are not silently dropped: they are returned
+    in ``unreadable`` with a reason, so the caller can surface incomplete coverage
+    instead of pretending a broken file simply had no matches.
+    """
+
+    all_matches: list[Match] = []
+    unreadable: list[tuple[Path, str]] = []
     for path in files:
         try:
             source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            unreadable.append((path, f"could not read: {exc}"))
+            continue
+        try:
             module = cst.parse_module(source)
-        except (UnicodeDecodeError, cst.ParserSyntaxError):
-            continue  # skip files we can't read/parse; matching stays deterministic
+        except cst.ParserSyntaxError as exc:
+            unreadable.append((path, f"could not parse: {exc}"))
+            continue
+        bindings = collect_import_bindings(module)
         wrapper = MetadataWrapper(module)
-        collector = _MatchCollector(rule, path, source)
+        collector = _MatchCollector(rules, path, bindings)
         wrapper.visit(collector)
-        results.extend(collector.matches)
-    return results
+        all_matches.extend(collector.matches)
+    return ScanResult(matches=all_matches, unreadable=unreadable)
+
+
+def find_matches(rule: Rule, files: list[Path]) -> list[Match]:
+    """Find every instance of ``rule``'s pattern across ``files``.
+
+    Thin wrapper over :func:`scan` for a single rule; unreadable files are skipped
+    (use :func:`scan` directly to learn which files could not be processed).
+    """
+
+    return scan([rule], files).matches
