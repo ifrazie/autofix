@@ -1,0 +1,79 @@
+# Example: run Autofix in CI and publish the proposed patch + report as artifacts.
+#
+# Copy this into a *target* repository's .github/workflows/ to try Autofix against
+# it. It does NOT modify the repo: it scans, proposes fixes on a throwaway branch,
+# verifies them, and uploads the machine-readable report and the reusable plan so a
+# human can review (and later `autofix apply` the exact same plan).
+#
+# The job fails if Autofix can't be trusted as clean (a transform error, a failing
+# or empty verification, or a pre-existing red suite) — see `autofix`'s exit codes.
+
+name: autofix
+
+on:
+  workflow_dispatch:        # run on demand from the Actions tab
+  pull_request:             # ...and surface proposed fixes on PRs
+
+permissions:
+  contents: read
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    env:
+      # Autofix needs a model provider. For Bedrock, set these repo secrets and the
+      # OIDC/role or keys your org uses; swap to `--provider ollama` for a local model.
+      AWS_REGION: us-east-1
+      AUTOFIX_PROVIDER: bedrock
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Autofix
+        run: |
+          python -m pip install --upgrade pip
+          # Install from PyPI/your index in a real setup; here, from the repo if vendored:
+          pip install autofix || pip install -e ./autofix
+
+      # Fail fast with a clear message if the environment isn't ready.
+      - name: Doctor
+        run: autofix doctor --json
+
+      # Free, model-free preview of what the rules match. Fails if any file is
+      # unreadable so incomplete coverage is visible.
+      - name: Scan (no model)
+        run: autofix scan . --rules-dir rules/ --json | tee scan.json
+
+      # Propose + verify fixes on a throwaway branch, emit a report and a reusable
+      # plan. Nothing in the working tree is modified.
+      - name: Fix (propose + verify)
+        id: fix
+        run: |
+          autofix fix . \
+            --rules-dir rules/ \
+            --json \
+            --plan-out autofix-plan.json \
+            | tee autofix-report.json
+
+      # Publish the artifacts for review regardless of pass/fail.
+      - name: Upload report and plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autofix-${{ github.run_id }}
+          path: |
+            scan.json
+            autofix-report.json
+            autofix-plan.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # To actually land the fixes later, a reviewer downloads autofix-plan.json and
+      # runs (no model call, refuses stale files):
+      #
+      #     autofix apply autofix-plan.json
+      #
+      # or wire a follow-up job that runs `autofix apply` and opens a pull request.
