@@ -1,19 +1,35 @@
 id: md5-to-sha256
-rationale: "MD5 is cryptographically broken and unsafe for security hashing; use SHA-256 instead."
+rationale: "MD5 is cryptographically broken and unsafe for security hashing; use SHA-256 for integrity/signature uses, and migrate password storage to a dedicated password hash (Argon2id/bcrypt/PBKDF2)."
 match:
   call: "md5"
 transform:
   prompt: >
-    You are given a single Python expression that calls md5(). Rewrite ONLY this
-    expression to use hashlib.sha256() in place of md5, and change NOTHING else:
-    keep the exact same arguments, and keep any chained method call such as
-    .hexdigest() or .digest() exactly as-is. Return valid Python for the single
-    expression only (no imports, no statements, no code fences).
+    You are given a single Python expression that calls md5(). Your job is to
+    decide whether a direct, mechanical rewrite to hashlib.sha256() is a CORRECT
+    and COMPLETE fix for this call, and only then to produce it.
+
+    When a fix IS correct, rewrite ONLY this expression to use hashlib.sha256()
+    in place of md5, changing NOTHING else: keep the exact same arguments, and
+    keep any chained method call such as .hexdigest() or .digest() exactly as-is.
+    Return valid Python for the single expression only (no imports, no
+    statements, no code fences).
 
     Decide confidence by the PURPOSE of the hash:
-    - Password hashing, session tokens, request/API signatures, and integrity or
-      tamper detection ARE security uses. For these, the fix IS correct: set
+
+    - Integrity / tamper detection, request or API signatures (HMAC-style
+      message signing), and other non-password security fingerprints ARE a
+      correct use for SHA-256. For these, the direct rewrite is complete: set
       confident = true.
+
+    - PASSWORD hashing (hashing a user password, login credential, or
+      passphrase for storage or verification) is NOT fixed by SHA-256. A fast
+      hash like SHA-256 is unsuitable for password storage; the correct fix is a
+      dedicated, slow password hash (Argon2id, bcrypt, or PBKDF2) with a per-user
+      salt, which is a structural change that cannot be made by swapping this one
+      call. Set confident = false and say the call REQUIRES MIGRATION to a
+      dedicated password hash (Argon2id/bcrypt/PBKDF2) rather than SHA-256; do
+      not emit a sha256 replacement.
+
     - A cache key, ETag, dedup key, or generic non-security fingerprint is NOT a
       security use. For these, changing md5 is unnecessary; set confident = false
       and briefly say it is a non-security checksum left alone.

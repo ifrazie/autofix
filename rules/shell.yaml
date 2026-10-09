@@ -7,8 +7,9 @@ match:
 transform:
   prompt: >
     You are given a single Python subprocess call invoked with shell=True and a
-    string command. Rewrite ONLY this call to use shell=False, passing the command
-    as a list of arguments instead of a string.
+    string command. When the command is a simple program plus arguments, rewrite
+    ONLY this call to use shell=False, passing the command as a list of arguments
+    instead of a string.
 
     STRICT RULES:
     - Keep the EXACT same subprocess function that was called (subprocess.run stays
@@ -20,6 +21,18 @@ transform:
     - Change shell=True to shell=False and keep every other keyword argument.
     - Return valid Python for the single call expression only (no code fences).
 
-    Set confident = true for the common case of a simple command with an appended
-    argument. Only set confident = false if the command is built so dynamically it
-    cannot be safely tokenized into a static argument list.
+    DO NOT rewrite the call when the command relies on shell FEATURES that an argv
+    list cannot reproduce. In these cases set confident = false and say the command
+    uses shell features (name the feature) and needs manual remediation. Treat the
+    following as unsupported and skip them:
+    - a pipe between programs (``|``) or a logical/sequencing operator
+      (``&&``, ``||``, ``;``);
+    - input/output redirection (``>``, ``>>``, ``<``, ``2>&1``);
+    - shell variable or command expansion (``$VAR``, ``${VAR}``, backticks,
+      ``$(...)``) or glob/wildcard characters (``*``, ``?``, ``[...]``) that are
+      meant to be expanded by the shell;
+    - a command built so dynamically that it cannot be safely tokenized into a
+      static argument list.
+
+    Only set confident = true for the common case of a simple command with an
+    appended argument and no shell features.

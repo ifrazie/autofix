@@ -50,7 +50,7 @@ def test_red_run_names_culprit_and_keeps_branch(tmp_path):
     assert vr.branch in branches
 
 
-def test_in_place_repo_restores_original_branch(tmp_path):
+def test_in_place_repo_uses_worktree_and_never_touches_checkout(tmp_path):
     target = _make_target(tmp_path)
     subprocess.run(["git", "init"], cwd=target, capture_output=True, text=True)
     subprocess.run(["git", "add", "-A"], cwd=target, capture_output=True, text=True)
@@ -61,15 +61,47 @@ def test_in_place_repo_restores_original_branch(tmp_path):
     base = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=target, capture_output=True, text=True
     ).stdout.strip()
+    # An unrelated, uncommitted edit the user has in flight.
+    (target / "mod.py").write_text("def val():\n    return 1  # local WIP\n", encoding="utf-8")
 
-    vr = verify(target, {target / "mod.py": "def val():\n    return 1  # inplace fix\n"}, target)
+    vr = verify(target, {target / "mod.py": "def val():\n    return 1  # autofix\n"}, target)
 
     assert vr.isolated is False and vr.workspace == target
     now = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=target, capture_output=True, text=True
     ).stdout.strip()
-    assert now == base  # working branch untouched
+    assert now == base  # the user is still on their branch
+    # The user's uncommitted edit is untouched (the fix landed only on the branch).
+    assert "local WIP" in (target / "mod.py").read_text(encoding="utf-8")
     branches = subprocess.run(
         ["git", "branch"], cwd=target, capture_output=True, text=True
     ).stdout
     assert vr.branch in branches  # autofix branch left intact
+    # No throwaway worktree is left registered.
+    worktrees = subprocess.run(
+        ["git", "worktree", "list"], cwd=target, capture_output=True, text=True
+    ).stdout
+    assert "autofix-wt-" not in worktrees
+
+
+def test_in_place_commit_contains_only_autofix_edits(tmp_path):
+    """An unrelated staged change must NOT ride along in the autofix commit."""
+    target = _make_target(tmp_path)
+    subprocess.run(["git", "init"], cwd=target, capture_output=True, text=True)
+    subprocess.run(["git", "add", "-A"], cwd=target, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "base"],
+        cwd=target, capture_output=True, text=True,
+    )
+    # A second file the user has staged but that Autofix never touches.
+    (target / "other.py").write_text("UNRELATED = True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "other.py"], cwd=target, capture_output=True, text=True)
+
+    vr = verify(target, {target / "mod.py": "def val():\n    return 1  # autofix\n"}, target)
+
+    # The autofix commit on its branch touched only mod.py.
+    files = subprocess.run(
+        ["git", "show", "--name-only", "--pretty=format:", vr.branch],
+        cwd=target, capture_output=True, text=True,
+    ).stdout.split()
+    assert files == ["mod.py"]

@@ -11,7 +11,7 @@ from autofix import reporter
 from autofix.matcher import find_matches
 from autofix.rules import MatchSpec, Rule
 from autofix.transformer import FixResult, UsageEstimate
-from autofix.verifier import VerifyResult
+from autofix.verifier import FAILED, NO_TESTS, PASSED, SKIPPED, VerifyResult
 
 ESC = "\x1b"  # start of an ANSI escape sequence
 
@@ -57,14 +57,29 @@ def test_verification_skipped_when_tests_not_run(capsys):
         branch="autofix/x",
         isolated=True,
         committed=["app/auth.py"],
-        passed=True,
+        state=SKIPPED,
         pytest_output="",
         culprits=[],
-        tests_ran=False,
     )
     reporter.verification(vr)
     out = capsys.readouterr().out
     assert "SKIPPED" in out and "--no-test" in out
+
+
+def test_verification_no_tests_is_not_a_pass(capsys):
+    vr = VerifyResult(
+        workspace=Path("/tmp/ws"),
+        branch="autofix/x",
+        isolated=True,
+        committed=["app/auth.py"],
+        state=NO_TESTS,
+        pytest_output="no tests ran",
+        culprits=[],
+    )
+    assert vr.passed is False
+    reporter.verification(vr)
+    out = capsys.readouterr().out
+    assert "NO TESTS" in out and "PASS" not in out
 
 
 def test_cost_line_shows_estimate_for_bedrock(capsys):
@@ -87,7 +102,7 @@ def test_json_report_shape(tmp_path):
         branch="autofix/x",
         isolated=True,
         committed=["m.py"],
-        passed=True,
+        state=PASSED,
         pytest_output="",
         culprits=[],
     )
@@ -95,10 +110,16 @@ def test_json_report_shape(tmp_path):
         [result], tmp_path, "bedrock", verify_result=vr, usage=usage, dry_run=False
     )
     data = json.loads(out)
-    assert data["summary"] == {"matched": 1, "fixed": 1, "skipped": 0, "errored": 0}
+    assert data["summary"] == {
+        "matched": 1, "fixed": 1, "applied": 1, "dropped": 0,
+        "skipped": 0, "errored": 0, "verified": True, "unreadable": 0,
+    }
     assert data["results"][0]["rule"] == "md5-to-sha256"
     assert data["results"][0]["status"] == "fixed"
+    assert data["results"][0]["outcome"] == "applied"
+    assert data["results"][0]["applied"] is True
     assert data["verification"]["passed"] is True
+    assert data["verification"]["state"] == "passed"
     assert data["usage"]["approximate"] is True
     assert data["usage"]["estimated_cost_usd"] is not None
     assert data["dry_run"] is False
@@ -117,8 +138,8 @@ def test_verification_red_shows_culprit_callout(capsys):
         branch="autofix/x",
         isolated=True,
         committed=["app/auth.py"],
-        passed=False,
-        pytest_output="",
+        state=FAILED,
+        pytest_output="FAILED tests/test_auth.py::test_x",
         culprits=["app/auth.py"],
     )
     reporter.verification(vr)
